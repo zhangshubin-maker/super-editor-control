@@ -5,7 +5,7 @@
 ## 组成
 
 - `skills/super-editor-control/SKILL.md` — 核心技能：连接编辑器、调用桥接 API 的工作流与规则。
-- `.mcp.json` + `scripts/mcp-server/` — 零依赖 Node MCP 服务端，通过 CDP 连接浏览器页面，把 `window.__superEditor` 包装成结构化工具（`editor_*`）。
+- `.mcp.json` + `scripts/mcp-server/` — 零依赖 Node MCP 服务端，通过同源 RPC 通道连接编辑器页面，把 `window.__superEditor` 包装成结构化工具（`editor_*`）。
 - `assets/bridge-api-spec.md` — `window.__superEditor` 桥接 API 契约（编辑器侧需要实现的接口）。
 - `assets/editor-integration-guide.md` — 在 super-editor 仓库内实现桥接层的逐步指南。
 
@@ -13,13 +13,13 @@
 
 - Node.js >= 22（MCP 服务端依赖原生 WebSocket）。
 - super-editor 已在本机运行，且已按 `assets/editor-integration-guide.md` 实现桥接层（`ai_control=1` 时挂载 `window.__superEditor`）。
-- 一个已登录的浏览器（推荐带调试端口启动的 Chrome）：`chrome.exe --remote-debugging-port=9222`。
+- 编辑器页面已带 `ai_control=1` 打开（dev server 内置同源 RPC 路由；生产按 `assets/production-integration-spec.md` 提供）。
 
 ## 使用
 
 1. 安装插件（personal marketplace 已生成）：`codex plugin add super-editor-control@personal`
 2. 新开一个 Codex 会话（技能与 MCP 工具在新会话中生效）。
-3. 让 Codex 打开课件链接（带 `ai_control=1`），或直接让它使用 `editor_connect` / `editor_open`。
+3. 让 Codex 打开课件链接（带 `ai_control=1`），或直接让它使用 `editor_connect({ pageUrl })`。
 4. 用自然语言下达任务，例如“把这页的标题改成蓝色并居中”。
 
 ## 开发

@@ -14,7 +14,7 @@
 
 ## 1. 总体思路
 
-**复用现有编辑页，而不是新做一个画布。** `/content-editor` 页面本身已经满足“左元素树 / 中画布 / 右属性面板”三栏布局。只要在页面挂载时检测 `ai_control=1`，把桥接对象挂到 `window` 上，Codex 就能驱动整个编辑器，且所有修改走与人工操作完全相同的 Vuex action（操作日志、撤销重做、自动高度联动全部生效）。
+**复用现有编辑页，而不是新做一个画布。** `/content-editor` 页面本身已经满足“左元素树 / 中画布 / 右属性面板”三栏布局。只要在页面挂载时检测 `ai_control=1`，把桥接对象挂到 `window` 上，Codex 就能驱动整个编辑器，且所有修改走与人工操作完全相同的 Vuex action（操作日志、自动高度联动全部生效）；ai_control 下撤销/重做改用整页深拷贝快照（checkpoint/rollback），不再写操作栈。
 
 ## 2. 实现步骤
 
@@ -68,6 +68,7 @@ src/modules/contentEditor/aiControl/
 | `selectSlide(id)` | `dispatch('contentEditorSlides/selectSlide', id)` |
 | `getSlide(id)` | 由 `slides`/`currentSlideAllTemplateList` + `dfcRecursion` 组装（参考 getter `currentSlideElementTree`） |
 | `addBlock(payload)` | `dispatch('contentEditorSlides/addBlockTemplate', template)`，template 至少含 `uuid`、`template_data_content: { size, elements: [] }` |
+| `cloneBlock(uuid, opts)` | `dispatch('contentEditorSlides/insertBlockTemplate', { template: cloneDeep(原模板) + 新 uuid, index })`，元素 id 冲突由 insertBlockTemplate 自动重生成 |
 | `updateBlock(payload)` | `dispatch('contentEditorSlides/updateBlockTemplateDateContent', {...})`（改 name 用 `renameBlockTemplate`） |
 | `deleteBlock(blockId)` | `dispatch('contentEditorSlides/deleteBlockTemplateByUuid', uuid)` |
 | `moveBlock(payload)` | `dispatch('contentEditorSlides/moveBlockTemplate', { fromIndex, toIndex })`（fromIndex 由 uuid 换算） |
@@ -79,7 +80,7 @@ src/modules/contentEditor/aiControl/
 | `orderElement(payload)` | `dispatch('contentEditorSlides/orderElement', { elements, position })` |
 | `groupElements(ids)` | `commit('baseEditorMain/setSelectElementIdList', ids, { root: true })` 后 `dispatch('contentEditorSlides/groupElements')`（现有 action 按选中列表打组） |
 | `ungroup(groupId)` | `dispatch('contentEditorSlides/decomposeElements')`（先选中该组） |
-| `undo()` / `redo()` | `dispatch('commonDataUndo/unDo')` / `dispatch('commonDataUndo/reDo')`（注意大小写） |
+| `undo()` / `redo()` | ai_control 下已禁用（返回 `{ disabled: true, reason }`），回退请用 `checkpoint()` / `rollback()` 整页快照；无需再 dispatch `commonDataUndo/unDo|reDo` |
 | `save()` | 复用 Header 的保存流程（`src/modules/contentEditor/components/Header/index.vue` 中 `saveCatalogContent` 的组装逻辑） |
 | `screenshot()` | 复用 `ScreenShotContainer` 或 `html2canvas` 截取画布可视区域，返回 data URL |
 | `isDirty()` | 依据 `commonDataSnapshot` / 保存状态判断 |
@@ -106,11 +107,12 @@ async function mutate(action, payload) {
 2. 打开 `/content-editor?book_id=<你的课件ID>&ai_control=1`。
 3. Console 验证：`window.__superEditor && await window.__superEditor.ping()`。
 4. 用本插件 MCP（`editor_connect` / `editor_get_state`）或浏览器技能执行一次元素修改，确认画布实时变化。
-5. 修改后 `editor_save`，刷新页面确认已持久化；再 `editor_undo` 验证撤销链路。
+5. 任务开始/关键节点先 `checkpoint({ label })` 打快照；修改后 `editor_save`，刷新页面确认已持久化；若结果不符合预期 `rollback({ checkpointId })` 恢复，任务成功 `clearCheckpoints()`。
 
 ## 4. 注意事项
 
-- **不要绕过 Vuex**：直接改 DOM/store 会让操作日志与撤销失效。
+- **不要绕过 Vuex**：直接改 DOM/store 会让操作日志与编辑器状态失效；回退只允许走桥接快照（checkpoint/rollback）。
+- **批量执行**：连续小步骤（改多个元素、多步读取、快照+编辑+核对）用 `batch({ steps })` 一次调用串行执行，一次返回全部结果，避免逐条 RPC 往返等待；写步骤之间会自动等渲染，安全可靠。
 - **PDF 书差异**：`smart_book_type === 1` 的 PDF 书有占位页、页码合并逻辑，桥接 `listSlides/getSlide` 需兼容。
 - **协同锁**：页面有 `EditLock` 协同编辑锁，多人编辑时桥接操作同样受锁约束。
 - **大组/复制 id 重制**：参考 `replaceElementsId` 及映射 Map 逻辑，避免 id 冲突。

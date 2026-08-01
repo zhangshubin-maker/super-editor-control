@@ -1,6 +1,6 @@
 {
   "name": "super-editor-control",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260801230439",
   "description": "Drive the Super Media Editor (super-editor) from Codex: open courseware in a browser, inspect and edit slides/blocks/elements, group, undo/redo and save via a window bridge.",
   "author": {
     "name": "Super Editor Team"
@@ -13,7 +13,11 @@
     "longDescription": "通过浏览器画布 + window.__superEditor 桥接 API，让 Codex 像控制 Figma 一样控制超媒编辑器：实时查看画布、操作元素与区块、调整属性、保存与回退，自动化完成课件创作、编辑、修改和优化任务。",
     "developerName": "Super Editor Team",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Read", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
     "defaultPrompt": [
       "打开课件 AI 编辑模式",
       "帮我新建一页课件并排版",

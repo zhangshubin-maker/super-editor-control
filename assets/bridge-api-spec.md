@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v0.1）
+# window.__superEditor 桥接 API 契约（v0.6）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -10,7 +10,8 @@
 
 ## 2. 调用约定
 
-- 所有方法返回 `Promise`；内部实现必须走 Vuex mutation/action（与用户 UI 操作同一条链路），以保留操作日志与撤销/重做。
+- 所有方法返回 `Promise`；内部实现必须走 Vuex mutation/action（与用户 UI 操作同一条链路），保留操作日志。
+- **ai_control 模式不写撤销/重做操作栈**（编辑器的 `commonDataUndo` 在该模式下不再入栈），回退一律用 §4.4 的整页深拷贝快照 `checkpoint()` / `rollback()`；默认编辑器（非 ai_control）行为完全不变。
 - 参数一律为普通对象/数组/基本类型；返回值一律可 JSON 序列化（不要返回 Vue 实例、DOM 节点、函数）。
 - 每个写操作完成后 `await this.$nextTick()`，保证调用方随后截图/读状态时拿到最新渲染。
 - 读操作返回“深拷贝”后的数据，避免调用方改动污染编辑器状态。
@@ -61,7 +62,21 @@
 | `ping()` | 无 | `{ version, editorType, bookId, mode }` |
 | `getState()` | 无 | 见上 |
 | `listSlides()` | 无 | `[{ id, name, pageId }]` |
+| `listTemplates(payload)` | `{ pageNo?, pageSize?, type?, name?, timeSort? }`（type：2=区块模板，3=样章模板） | `[{ id, name, type, parentId, cover }]` |
 | `getSlide(slideId)` | string | 见上 |
+| `getBlock(blockId)` | string | `{ blockId, name, size, elements }`（单区块含元素树） |
+| `getElement(elementId)` | string | 元素完整数据（含 `blockId`） |
+| `listElements(filter?)` | `{ blockId?, type? }` | 扁平元素列表 `[{ id, name, type, left, top, width, height, blockId }]` |
+| `findElements(filter?)` | 同 `listElements` | 同 `listElements`（别名） |
+| `getCanvasTree()` | 无 | 整页结构化树：`{ slide, blocks: [{ blockId, index, name, size, elementCount, elements }], stats: { blockCount, elementCount, typeCounts } }`（AI 理解画布首选） |
+| `getSlideStats()` | 无 | `{ blockCount, elementCount, typeCounts, wordCount }` |
+| `listBlocks()` | 无 | `[{ blockId, index, name, size, elementCount }]` |
+| `getBlockIndex(blockId)` | string | 区块在当前页原始下标 |
+| `searchElements(filter?)` | `{ keyword?, type?, blockId? }` | 按名称/内容/类型搜索 `[{ id, name, type, left, top, width, height, blockId, inGroup }]` |
+| `getElementsBounds(elementIds)` | `string[]`（顶层元素） | `{ minX, minY, maxX, maxY, width, height, centerX, centerY }`（包围盒） |
+| `getHistoryState()` | 无 | `{ canUndo: false, canRedo: false, undoDisabled: true, reason, checkpointCount, checkpoints: [{ checkpointId, slideId, label, time }] }` |
+| `listElementTypes()` | 无 | `[{ type, name, defaultWidth, defaultHeight }]`（全部元素类型） |
+| `getElementSchema(type)` | string | `{ type, typeName, defaults, commonProps, typeProps }`（该类型默认结构与可设置字段） |
 | `isDirty()` | 无 | `Boolean` |
 
 ### 页面（slide）
@@ -69,8 +84,12 @@
 | 方法 | 参数 | 返回 |
 |------|------|------|
 | `selectSlide(slideId)` | string | 无 |
-| `addSlide(payload)` | `{ name?, parentId?, template_id?, type? }`（不加模板时创建空页面） | `slideId` |
+| `addSlide(payload)` | `{ name?, parentId?, template_id?, type? }`（不传 template_id 时自动复用/创建空白样章模板） | `{ slideId }` |
 | `deleteSlide(slideId)` | string | 无 |
+| `renameSlide(slideId, name)` | (string, string) | 无（目录重命名，即时生效） |
+| `duplicateSlide(slideId)` | string | `{ slideId }`（服务端复制整页含内容） |
+| `getSlideMenu()` | 无 | 目录树（当前 store 内的书本目录） |
+| `refreshSlideMenu()` | 无 | 无（重新拉取目录） |
 | `moveSlide(payload)` | `{ slideId, toIndex }`（同级排序） | 无 |
 
 ### 区块（block）
@@ -78,9 +97,16 @@
 | 方法 | 参数 | 返回 |
 |------|------|------|
 | `addBlock(payload)` | `{ afterBlockId?, size? }` | `blockId` |
+| `cloneBlock(blockId, opts?)` | `(uuid, { afterBlockId?, name? })` | `blockId`（新，元素 id 自动重生成） |
 | `updateBlock(payload)` | `{ blockId, patch }`（patch 支持 `name`、`size` 等） | 无 |
 | `deleteBlock(blockId)` | string | 无 |
 | `moveBlock(payload)` | `{ blockId, toIndex }` | 无 |
+| `insertBlocks(blocks, opts?)` | `(模板数组, { index? })` | `{ blockIds }`（批量插入，uuid 自动重新生成，元素 id 冲突自动替换） |
+| `importBlocks(slideId, blocks, opts?)` | `(string, 模板数组, { index? })` | `{ slideId, blockIds }`（跨页导入：自动切换到目标页并插入） |
+| `replaceBlock(blockId, templateData)` | (string, 模板对象) | `{ blockId }`（整体替换区块内容，保持原位置与原 uuid） |
+| `renameBlock(blockId, name)` | (string, string) | 无 |
+| `copyBlockToSlide(blockId, targetSlideId, opts?)` | `(string, string, { index? })` | `{ slideId, blockIds }`（跨页复制；目标页不同时当前页会切到目标页） |
+| `insertTemplate(templateData, index?)` | 模板结构对象 + 插入位置（省略追加末尾） | `blockId`（原样插入，元素 id 保留；用于恢复/迁移区块） |
 
 ### 元素（element）
 
@@ -93,6 +119,23 @@
 | `resizeElement(payload)` | `{ elementId, width, height }` | 无 |
 | `rotateElement(payload)` | `{ elementId, angle }` | 无 |
 | `duplicateElement(elementId)` | string | `elementId`（新） |
+| `addElements(payload)` | `{ blockId, elements: [{ type, payload }] }` | `{ elementIds }`（批量新增） |
+| `updateElements(payload)` | `{ elementIds, patch }` | 无（批量改属性，一次 dispatch） |
+| `deleteElements(elementIds)` | `string[]` | 无 |
+| `duplicateElements(elementIds, opts?)` | `(string[], { offsetX?, offsetY? })` | `{ elementIds }`（批量复制，默认 +20/+20） |
+| `moveElements(payload)` | `{ elementIds, x, y }` | 无（顶层元素左上角移到指定点） |
+| `moveElementsByOffset(payload)` | `{ elementIds, dx?, dy? }` | 无（相对偏移） |
+| `alignElements(payload)` | `{ elementIds, align, target? }`，align ∈ `top/bottom/left/right/horizontal/vertical/center/hdengju/vdengju`，target ∈ `selection/canvas` | `{ align, target, elementCount }`（对齐/等间距，与编辑器快捷键一致） |
+| `setElementSpacing(payload)` | `{ elementIds, direction: horizontal/vertical, spacing }` | `{ direction, spacing, elementCount }`（按方向重排为等间距） |
+| `centerElementInBlock(payload)` | `{ elementId, axis: horizontal/vertical/both }` | 无（在所属区块内居中） |
+| `lockElements(elementIds, locked?)` | `(string[], boolean)` | 无（isLock） |
+| `hideElements(elementIds, hidden?)` | `(string[], boolean)` | 无（isHidden） |
+| `setElementOpacity(payload)` | `{ elementId, opacity: 0~1 }` | 无 |
+| `renameElement(elementId, name)` | (string, string) | 无 |
+| `flipElement(payload)` | `{ elementId, direction: horizontal/vertical }` | 无（flipH/flipV，图片/文本框） |
+| `setElementText(payload)` | `{ elementId, content }` | 无（text/shape/input/textarea/mind 写 content，latex 写 latex） |
+| `setImageSrc(payload)` | `{ elementId, src }` | 无（image/video 换资源地址） |
+| `setTextStyle(payload)` | `{ elementId, style: { fontSize?, color?, lineHeight?, fontName?, fontWeight?, verticalAlign?, wordSpace?, adaptive? } }` | 无（映射到文本元素顶层样式字段） |
 | `orderElement(payload)` | `{ elementId, position }`，position ∈ `front/forward/backward/back` | 无 |
 
 ### 打组
@@ -102,17 +145,104 @@
 | `groupElements(elementIds)` | `string[]` | `groupId` |
 | `ungroup(groupId)` | string | 无 |
 
+### 选中与视图（AI 控制增强）
+
+| 方法 | 参数 | 返回 |
+|------|------|------|
+| `selectElement(elementId)` | string | `{ selected: [id] }`（单选并滚动定位） |
+| `selectElements(elementIds)` | `string[]` | `{ selected: ids }`（多选） |
+| `getSelection()` | 无 | `[elementId]`（当前选中） |
+| `getViewport()` | 无 | `{ left, top, scale, canvasWidth, canvasHeight }` |
+| `setViewport(payload)` | `{ left?, top? }` | 最新 `getViewport()` |
+| `scrollCanvas(payload)` | `{ deltaX?, deltaY? }` | 最新 `getViewport()` |
+| `scrollToElement(elementId)` | string | 最新 `getViewport()`（自动滚动到元素可见） |
+| `setZoom(scale)` | number（0.1~3） | 最新 `getViewport()` |
+| `zoomIn(step?)` / `zoomOut(step?)` | number（默认 0.1） | 最新 `getViewport()` |
+| `fitCanvas()` | 无 | 最新 `getViewport()`（自适应窗口并居中） |
+| `scrollToTop()` / `scrollToBottom()` | 无 | 最新 `getViewport()` |
+| `clearSelection()` | 无 | `{ selected: [] }` |
+| `getCanvasInfo()` | 无 | `{ slideId, canvasWidth, canvasHeight, scale, viewportLeft, viewportTop, stats }` |
+| `scrollToBlock(blockId)` | string | 最新 `getViewport()`（滚动到区块顶部附近） |
+
+> 选中元素后，右侧属性面板会同步显示该元素的 X/Y/宽高/样式，`getElement` 可直接读取数据；
+> 所有视图操作均走 `baseEditorMain` 的 `setViewportLeft/Top` 与 `setScrollIntoElement`，与用户滚动画布等效。
+
 ### 历史 / 保存 / 视觉
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
-| `undo()` / `redo()` | 无 | 无 |
+| `undo()` / `redo()` | 无 | `{ disabled: true, reason }`（ai_control 已禁用，改用快照回滚） |
+| `canUndo()` / `canRedo()` | 无 | `{ disabled: true, reason }`（同左） |
 | `save()` | 无 | 无（复用编辑器保存流程） |
+
+### 快照 / 回滚（ai_control 专用，替代撤销/重做）
+
+| 方法 | 参数 | 返回 |
+|------|------|------|
+| `checkpoint(payload)` | `{ label? }`（任务开始/关键大节点调用，勿频繁） | `{ checkpointId, slideId, label, time, blockCount, elementCount }`（整页深拷贝快照） |
+| `rollback(payload)` | `{ checkpointId }`（仅限回滚到同一页面） | `{ checkpointId, slideId, label, time, blockCount, elementCount, rollbackAt }` |
+| `listCheckpoints()` | 无 | `[{ checkpointId, slideId, label, time, blockCount, elementCount }]` |
+| `clearCheckpoints()` | 无 | `{ cleared }` |
+
+> 快照存于页面 window 级 `Map`（`window.__superEditorCheckpoints`），页面刷新即清空；**任务开始打一个 checkpoint，任务成功 `clearCheckpoints()`，失败 `rollback()`**。
+
+### 批量执行（一次往返多步，减少等待）
+
+| 方法 | 参数 | 返回 |
+|------|------|------|
+| `batch(payload)` | `{ steps: [{ method, args }], stopOnError?: boolean }` | `{ results: [{ index, method, ok, value \| error }], stopped, stoppedAt }` |
+
+- `steps[].method` 为桥接方法名，`args` 为参数数组（无参数传 `[]`）；步骤**按顺序串行**执行，每步完成后等渲染（nextTick），写操作安全。
+- `stopOnError=true`（默认）遇错即停并返回已执行结果；`false` 时收集全部结果继续。
+- 用法：把无依赖的独立小步骤合并成一次调用（如 `checkpoint → 批量改元素 → scrollToBlock → getSlide 核对`，或 `getState + getSlide + listBlocks` 一次读完），省去逐条调用的轮询/往返等待。
+
+### 表格 / 选项卡 / 思维导图 / 文本
+
+| 方法 | 参数 | 返回 |
+|------|------|------|
+| `updateTable(payload)` | `{ tableId, patch }`（widths/heights/borderColor 等顶层字段） | 无 |
+| `setTableCellContent(payload)` | `{ tableId, row, col, content }`（0 基，被合并覆盖格不可写） | 无 |
+| `setTableCellBackground(payload)` | `{ tableId, row, col, background }`（传空串/null 清除） | 无 |
+| `setTableData(payload)` | `{ tableId, tableData }`（整表数据替换） | 无 |
+| `getTableInfo(payload)` | `{ tableId }` | `{ tableId, rows, cols, widths, heights, mergedCells, border, style }` |
+| `getTableGrid(payload)` | `{ tableId }` | `{ rows, cols, mergedCells, grid: [[{ row, col, id, rowspan, colspan, isOrigin, isCovered, origin, content(纯文本), contentHtml, backgroundColor }]] }`（AI 读表格首选） |
+| `insertTableRow(payload)` | `{ tableId, index }`（0 基，自动处理合并跨行） | `{ tableId, rows, cols }` |
+| `deleteTableRow(payload)` | `{ tableId, index, count? }` | `{ tableId, rows, cols }` |
+| `insertTableColumn(payload)` | `{ tableId, index }`（0 基） | `{ tableId, rows, cols }` |
+| `deleteTableColumn(payload)` | `{ tableId, index, count? }` | `{ tableId, rows, cols }` |
+| `mergeTableCells(payload)` | `{ tableId, startRow, startCol, endRow, endCol }`（0 基含边界） | `{ tableId, merged }` |
+| `splitTableCell(payload)` | `{ tableId, row, col }`（合并起点坐标） | `{ tableId, split }` |
+| `setTabs(payload)` | `{ tabId, tabs: [{ id?, label }] }`（id 缺失自动生成） | 无 |
+| `setActiveTab(payload)` | `{ tabId, index }` | 无 |
+| 思维导图（v0.5，数据模型：`content` = kityminder JSON 字符串 `{ root: { data: { id, text(HTML), type }, children: [] }, template, theme }`） | | |
+| `getMindData(payload)` | `{ mindId }` | `{ mindId, template, theme, version, connectColor, root }`（原始数据，适合备份） |
+| `getMindTree(payload)` | `{ mindId }` | `{ mindId, template, theme, nodeCount, depth, root: { id, text(纯文本), textHtml, type, depth, path, attrs, children[] } }`（AI 读思维导图首选） |
+| `setMindData(payload)` | `{ mindId, content }`（对象或 JSON 字符串，自动补齐节点 id） | `{ mindId, nodeCount }` |
+| `setMindNodeText(payload)` | `{ mindId, nodeId, text }`（纯文本自动包 `<p>`，HTML 原样保留） | `{ mindId, nodeId, text }` |
+| `addMindNode(payload)` | `{ mindId, nodeId?, position: child/sibling, text?, index?, data? }` | `{ mindId, nodeId(新), position, parentId }` |
+| `deleteMindNode(payload)` | `{ mindId, nodeId }`（中心主题不可删） | `{ mindId, nodeId, deleted, remaining }` |
+| `updateMindNode(payload)` | `{ mindId, nodeId, patch }`（color/fontsize/bold/italic/fontFamily/background/note/image/hyperlink/priority/progress/expandState 等，null 删除） | `{ mindId, nodeId, updated }` |
+| `setMindTemplate(payload)` | `{ mindId, template }`（default/right/left/right_angle/default_angle/left_angle/orthogonal） | `{ mindId, template }` |
+| `setMindTheme(payload)` | `{ mindId, theme }`（mind-default/retro/youth/minimalist/black） | `{ mindId, theme }` |
+| 文本（v0.6，自适应：`background.extendType` = both/horizontal/vertical/none，`maxWidth/maxHeight` 上限，背景图尺寸为下限，组内元素自动联动位移） | | |
+| `getTextInfo(payload)` | `{ elementId }` | `{ elementId, blockId, content(HTML), text(纯文本), wordCount, font, lineHeight, wordSpace, verticalAlign, textAlign, adaptive, overflowType, maxWidth, maxHeight, padding, background{type,extendType,color,image,width,height}, geometry, groupId, isLock, isHidden }` |
+| `setTextContent(payload)` | `{ elementId, content, fitSize?, waitMs? }`（纯文本自动包 `<p>`，`\n` 自动拆成多段；fitSize 默认 true 触发自适应） | `{ elementId, content, text, extendType, width, height, dWidth, dHeight, autoResized, moved[] }` |
+| `setTextAdaptive(payload)` | `{ elementId, extendType, fitSize? }`（both/horizontal/vertical/none） | `{ elementId, extendType, previous, width, height, dWidth, dHeight, autoResized, moved[] }` |
+| `fitTextSize(payload)` | `{ elementId, waitMs? }`（强制重测） | `{ elementId, width, height, dWidth, dHeight, autoResized, moved[] }` |
+
+### 数据交换（备份 / 整页导入导出）
+
+| 方法 | 参数 | 返回 |
+|------|------|------|
+| `exportSlide(slideId?)` | string（省略=当前页） | `{ slideId, blocks }`（整页完整数据，可用于备份/跨页复用） |
+| `replaceSlideContent(slideId, blocks)` | `(string, 模板数组)` | `{ slideId, blockIds }`（清空目标页后重建；传空数组=清空页面） |
+| `getBridgeInfo()` | 无 | `{ version, instanceId, bookId, methods }`（methods 为全部可用方法名） |
+| `batch(payload)` | `{ steps: [{ method, args }], stopOnError? }` | `{ results: [{ index, method, ok, value/error }], stopped, stoppedAt }`（一次往返串行执行多步，见下） |
 | `screenshot()` | 无 | `data:image/png;base64,...`（画布可视区域） |
 
 ## 5. 实现注意事项
 
-- **走 Vuex action**：所有写操作 dispatch 现有 action（见 `editor-integration-guide.md` 的映射表），这样 `commonDataSave` 会记录操作对象，撤销/重做（`commonDataUndo`）才能工作。
+- **走 Vuex action**：所有写操作 dispatch 现有 action（见 `editor-integration-guide.md` 的映射表），这样 `commonDataSave` 会记录操作日志；**ai_control 下 `commonDataUndo` 不入栈**，撤销/重做由快照（checkpoint/rollback）承担，避免操作栈在长链路 AI 操控下不收敛。
 - **id 生成与替换**：新增元素必须生成唯一 `id`，并设置 `templateId = 所在区块 uuid`、`groupId = 0`；打组后子元素 `groupId = 组 id`；复制/深拷贝时用 `replaceElementsId` 同步替换所有子级 `groupId`。
 - **高度联动**：增删改元素后调用 `updateTemplateHeightByElementList(templateId)`（现有 action 已处理）。
 - **错误处理**：任何失败都 reject，消息要可读（例如 `区块不存在: xxx`）。
@@ -124,14 +254,34 @@
 ## 6. 安全
 
 - 桥接只在 `ai_control=1` 且非生产环境挂载；服务端若可鉴权更佳。
-- `editor_eval` 类低层通道不要暴露给非授权方；本插件只在页面上下文调用，不新增远程端口。
+- 调用一律走 §6.5 的 RPC 通道（方法白名单在页面/服务端过滤）；本插件不新增远程端口，不暴露任意代码执行。
 - 建议给桥接增加调用白名单/频率限制（可选）。
+## 6.5 RPC 通道（推荐调用方式，生产/开发通用）
+
+编辑器侧（`src/modules/contentEditor/aiControl/index.js`）在挂载桥接时同时启动两类通道：
+
+### 方式 A：同源 HTTP RPC 通道（推荐，生产/开发通用）
+- 桥接主世界每 400ms 轮询 `{origin}/ai-control/rpc/poll?instance=<页面实例ID>`（默认 `window.location.origin + '/ai-control'`；可用 `window.__SUPER_EDITOR_RPC_URL` 覆盖为独立本地服务，如 `http://127.0.0.1:8765`）；
+- dev server（`vue.config.js` devServer.before）已内置全部端点；生产由后端按 `assets/production-integration-spec.md` 提供；
+- 外部服务（RPC 服务端）为每个页面实例维护命令队列；poll 到队列有命令时返回 `{ id, method, args }`，否则返回 204；
+- 桥接执行 `window.__superEditor[method](...args)` 后 POST 结果到 `/rpc/result`：`{ id, ok, value|error }`；`ping()` 返回 `instanceId`（页面自身实例 ID）；
+- 调用方 `POST {origin}/ai-control/rpc/request`：`{ method, args, timeoutMs?, targetInstance? }`，服务端入队并**长轮询等待结果**（最多 90s）后响应 `{ ok, value, error, instance }`（`instance` 为实际路由的页面实例 ID）；页面实例 ID 在 `<html data-se-rpc-instance="...">` 上，`ping()` 也会返回 `instanceId`；多标签页时用 `targetInstance` 精确路由，避免旧页面抢执行；
+- 实例管理：服务端按 poll 心跳维护实例列表（30s 无 poll 自动清理），`request` 不带 `targetInstance` 时路由到最近 20s 内活跃的实例；调用方可先 `ping()`（不带 target）拿 `instance` 字段，之后所有调用固定带 `targetInstance`，避免多标签页串台；
+- 特性：不依赖 CDP 端口、不依赖鼠标、无跨域；`args` 一律为数组，方法缺失/抛错时 `ok=false` 且返回可读 `error` 文本（优先 message/msg/desc，兜底 JSON 序列化）；
+- 服务端需要允许 CORS（`Access-Control-Allow-Origin: *`）并处理 OPTIONS 预检（同源调用其实不需要）。
+
+### 方式 B：DOM 属性通道（备用，供可写 DOM 的隔离环境）
+- 请求：`document.documentElement.setAttribute('data-se-rpc-req', JSON.stringify({ id, method, args }))`；
+- 响应：`data-se-rpc-res` 属性变为 `JSON.stringify({ id, ok, value|error })`；
+- 主世界通过 MutationObserver 监听 `data-se-rpc-req` 属性变化并执行。
+- 注意：某些严格只读沙箱（无 `setAttribute`）只能用方式 A。
+
 ## 7. 实战经验（2026-08 首轮验证补充）
 
 ### 7.1 探测与连接
 - 页面挂载后 `document.documentElement` 会出现 `data-super-editor-bridge="1"` 属性，卸载时移除。任何隔离世界/主世界都可以用它探测桥接是否就绪。
-- 浏览器扩展类控制工具（如 content-script 沙箱）通常**看不到** `window.__superEditor`，此时以 DOM 标记为准；真正调用方法必须走 CDP `Runtime.evaluate`（主世界）。
-- URL 带 `token` 时，全新浏览器实例（`--remote-debugging-port` + 独立 `--user-data-dir`）打开同一 URL 即可直接鉴权，无需用户已登录的浏览器。
+- 浏览器扩展类控制工具（如 content-script 沙箱）通常**看不到** `window.__superEditor`，此时以 DOM 标记为准；真正调用方法一律走 §6.5 同源 RPC 通道（页面侧轮询执行，等效主世界调用）。
+- URL 带 `token` 时，任意浏览器打开该 URL 即可直接鉴权；调用方只需能访问同源 RPC 路由。
 
 ### 7.2 参数约定（重要）
 - `getSlide(slideId)` / `selectSlide(slideId)` / `deleteBlock(blockId)` 等方法的 id 参数一律是**标量**（string/number），传 `{ slideId }` 对象会触发服务端反序列化错误（`Cannot deserialize ... int from Object`）。
@@ -155,6 +305,12 @@
 ```
 
 ### 7.4 画布渲染与验证
-- 编辑器画布是**虚拟滚动**：`#canvas-ref` 只渲染可视区块，`screenshot()`（html2canvas）只能捕获已渲染部分；验证远端区块时先用 wheel 事件滚动画布（`scrollTop` 被自定义滚动接管，直接赋值无效）。
-- 滚动验证示例：`document.querySelector('#canvas-ref').dispatchEvent(new WheelEvent('wheel', { deltaY: 500, bubbles: true, cancelable: true }))`，循环滚动后读取 `innerText` 核对文本。
+- 编辑器画布是**虚拟滚动**：`#canvas-ref` 只渲染可视区块，`screenshot()`（html2canvas）只能捕获已渲染部分。
+- **滚动必须走桥接**：`scrollToBlock(blockId)` / `scrollToElement(elementId)` / `scrollCanvas({ deltaY })`（`scrollTop` 被自定义滚动接管，直接赋值无效；也不要用鼠标滚轮模拟）。
+- 元素坐标以 `getElement` / `listElements` 返回的 `left/top/width/height`（区块内相对坐标）为准；区块在画布中的绝对位置可用 `blockTemplateListTopMap` 换算。
 - 编辑前先 `getSlide` 全量 JSON 备份；保存后 `Page.reload` 再从服务端读取验证持久化。
+
+### 7.5 页面增删（addSlide/deleteSlide 实测要点）
+- 后端 `addcatalogandtemplate` 校验 `template_id >= 1`：空字符串会被拒绝（`template_id 最小不能小于1`）。`addSlide` 不传 `template_id` 时桥接会自动：① 扫描模板库空白样章模板（无区块）复用；② 没有再调用 `addtemplate` 创建一个空白样章模板（按 book_id 缓存）。
+- `deleteSlide` 删除当前页后会自动切回目录第一页；删除前先 `getSlide` 备份。
+- 错误信息：轮询通道会把 axios 拦截器 reject 的 `response.data`（含 `msg` 字段）解析为可读文本；旧版直接 `String(err)` 会得到 `[object Object]`，已修复。
