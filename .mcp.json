@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "super-editor": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["C:/Users/17909/plugins/super-editor-control/scripts/mcp-server/index.js"],
+      "env": {
+        "SUPER_EDITOR_CDP_URL": "http://127.0.0.1:9222"
+      }
+    }
+  }
+}
