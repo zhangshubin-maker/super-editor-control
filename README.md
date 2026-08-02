@@ -46,6 +46,6 @@ MCP 服务端需要 Node >= 22。Codex 桌面应用自带 Node 运行时，`.mcp
 ## 开发
 
 - 修改 MCP 服务端后重装插件：
-  `python C:/Users/17909/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py C:/Users/17909/plugins/super-editor-control`
+  `python C:/Users/shubin/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py C:/Users/shubin/plugins/super-editor-control`
   然后 `codex plugin add super-editor-control@personal`。
 - 无浏览器时可用 MOCK 模式测试 MCP 服务端：`SUPER_EDITOR_MOCK=1 node scripts/mcp-server/index.js`。
