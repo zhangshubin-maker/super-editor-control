@@ -2,7 +2,7 @@
     "mcpServers":  {
                        "super-editor":  {
                                             "type":  "stdio",
-                                            "command":  "C:/Users/17909/AppData/Local/OpenAI/Codex/bin/node.exe",
+                                            "command":  "D:/nvm/v22.22.1/node.exe",
                                             "args":  [
                                                          "C:/Users/17909/plugins/super-editor-control/scripts/mcp-server/index.js"
                                                      ]

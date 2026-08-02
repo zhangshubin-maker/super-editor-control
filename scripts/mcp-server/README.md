@@ -40,7 +40,7 @@ node index.js
 | `editor_undo` / `editor_redo` | 撤销/重做（ai_control 已禁用，返回 disabled 提示） |
 | `editor_checkpoint` / `editor_rollback` / `editor_list_checkpoints` / `editor_clear_checkpoints` | 整页快照：创建 / 回滚 / 列出 / 清理（ai_control 替代撤销重做） |
 | `editor_save` | 保存 |
-| `editor_table_info` / `editor_table_set_cell` / `editor_table_update` / `editor_table_structure` | 表格：读取结构/网格、改单元格、整表更新、行列增删与合并拆分 |
+| `editor_table_info` / `editor_table_set_cell` / `editor_table_update` / `editor_table_structure` / `editor_table_fit_heights` | 表格：读取结构/网格、改单元格、整表更新、行列增删与合并拆分、行高自适应收紧 |
 | `editor_mind_info` / `editor_mind_set_node` / `editor_mind_structure` / `editor_mind_update` | 思维导图：读节点树、改节点文本/样式、增删节点、整图替换与模板主题 |
 | `editor_text_info` / `editor_text_set_content` / `editor_text_adaptive` / `editor_text_fit` | 文本：读结构/自适应模式、改内容并触发宽高自适应、切 extendType、强制重测（含组内联动位移返回） |
 | `editor_batch` | 批量执行多步骤（一次往返串行执行 `steps: [{ method, args }]`，一次返回全部结果；`stopOnError` 默认遇错即停） |

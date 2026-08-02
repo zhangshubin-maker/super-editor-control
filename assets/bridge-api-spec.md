@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v0.6）
+# window.__superEditor 桥接 API 契约（v0.7）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -212,6 +212,7 @@
 | `deleteTableColumn(payload)` | `{ tableId, index, count? }` | `{ tableId, rows, cols }` |
 | `mergeTableCells(payload)` | `{ tableId, startRow, startCol, endRow, endCol }`（0 基含边界） | `{ tableId, merged }` |
 | `splitTableCell(payload)` | `{ tableId, row, col }`（合并起点坐标） | `{ tableId, split }` |
+| `fitTableHeights(payload)` | `{ tableId, waitMs?=2000, minHeight?=30 }`（按单元格实际内容高度重算每行最小高度并写回 heights，等效逐行拖拽收缩；内容变小时编辑器不会自动收缩，用它收紧；自动处理 rowspan 合并单元格） | `{ tableId, changed, heights, oldHeights, height }` |
 | `setTabs(payload)` | `{ tabId, tabs: [{ id?, label }] }`（id 缺失自动生成） | 无 |
 | `setActiveTab(payload)` | `{ tabId, index }` | 无 |
 | 思维导图（v0.5，数据模型：`content` = kityminder JSON 字符串 `{ root: { data: { id, text(HTML), type }, children: [] }, template, theme }`） | | |

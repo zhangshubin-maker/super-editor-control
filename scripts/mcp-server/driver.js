@@ -158,6 +158,8 @@ function mockResult(method, args = []) {
     case 'redo':
     case 'save':
       return null
+    case 'fitTableHeights':
+      return { tableId: arg.tableId, changed: true, heights: [32, 70], oldHeights: [45, 85], height: 102 }
     case 'getTableInfo':
       return { tableId: arg.tableId, rows: 2, cols: 3, widths: [100, 100, 100], heights: [40, 40], mergedCells: [], border: {}, style: {} }
     case 'getTableGrid':

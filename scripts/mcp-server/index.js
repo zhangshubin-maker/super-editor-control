@@ -417,6 +417,20 @@ const TOOLS = [
     }
   },
   {
+    name: 'editor_table_fit_heights',
+    description: '表格行高自适应（仅 AI 控制）：按单元格实际内容高度重算每行最小高度并写回 heights，等效于逐行拖拽收缩。用于字号/内容缩小后收紧表格；处理合并单元格。waitMs 为内容变更后等待渲染的毫秒数（默认 2000），minHeight 为行高下限（默认 30）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tableId: { type: 'string', description: '表格元素 id' },
+        waitMs: { type: 'number', description: '内容变更后等待渲染的毫秒数，默认 2000，上限 5000' },
+        minHeight: { type: 'number', description: '行高下限，默认 30' }
+      },
+      required: ['tableId'],
+      additionalProperties: false
+    }
+  },
+  {
     name: 'editor_mind_info',
     description: '读取思维导图结构：返回规范节点树（每节点 id/纯文本/HTML/层级/路径/常用样式摘要）+ 节点总数/最大深度 + 整体模板/主题。思维导图操控前先读它。',
     inputSchema: {
@@ -738,6 +752,9 @@ async function callTool(name, args) {
       }
       break
     }
+    case 'editor_table_fit_heights':
+      data = await driver.bridgeCall('fitTableHeights', [{ tableId: args.tableId, waitMs: args.waitMs, minHeight: args.minHeight }])
+      break
     case 'editor_mind_info': {
       const [data0, tree] = await Promise.all([
         driver.bridgeCall('getMindData', [{ mindId: args.mindId }]),

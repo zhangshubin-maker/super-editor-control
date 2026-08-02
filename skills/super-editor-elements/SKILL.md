@@ -1,6 +1,6 @@
 ---
 name: super-editor-elements
-description: 超媒编辑器（super-editor-control 插件）元素操作技能。在需要新增、删除、修改、移动、缩放、旋转、复制、选中、调整层级、打组/解组超媒画布元素（文本/图片/形状/表格/音频/视频等）时使用。表格操控（读网格/改单元格/行列增删/合并拆分）见 §6.5，思维导图操控（读节点树/改文本样式/增删节点/切模板主题）见 §6.6，文本操控（内容修改后的宽高自适应与组内联动）见 §6.7。详细描述 window.__superEditor 桥接对象中 addElement/updateElement/getElement/listElements/selectElement/moveElement/resizeElement/rotateElement/duplicateElement/orderElement/groupElements/ungroup 的调用方式、各元素类型默认结构与文本样式模板。
+description: 超媒编辑器（super-editor-control 插件）元素操作技能。在需要新增、删除、修改、移动、缩放、旋转、复制、选中、调整层级、打组/解组超媒画布元素（文本/图片/形状/表格/音频/视频等）时使用。表格操控（读网格/改单元格/行列增删/合并拆分/行高自适应收紧）见 §6.5，思维导图操控（读节点树/改文本样式/增删节点/切模板主题）见 §6.6，文本操控（内容修改后的宽高自适应与组内联动）见 §6.7。详细描述 window.__superEditor 桥接对象中 addElement/updateElement/getElement/listElements/selectElement/moveElement/resizeElement/rotateElement/duplicateElement/orderElement/groupElements/ungroup 的调用方式、各元素类型默认结构与文本样式模板。
 ---
 # Super Editor Elements（元素控制）
 
@@ -31,7 +31,7 @@ description: 超媒编辑器（super-editor-control 插件）元素操作技能�
 | `renameElement(elementId, name)` | (string, string) | 无 |
 | `flipElement(payload)` | `{ elementId, direction }` | 无 |
 | `setElementText` / `setImageSrc` | `{ elementId, ... }` | 无（文本/资源快捷设置） |
-| `setTableCellContent` / `setTableCellBackground` / `setTableData` / `getTableGrid` / `getTableInfo` / `insertTableRow` / `deleteTableRow` / `insertTableColumn` / `deleteTableColumn` / `mergeTableCells` / `splitTableCell` / `setTabs` / `setActiveTab` | 表格/选项卡专用（v0.4） | 见 §6.5 |
+| `setTableCellContent` / `setTableCellBackground` / `setTableData` / `getTableGrid` / `getTableInfo` / `insertTableRow` / `deleteTableRow` / `insertTableColumn` / `deleteTableColumn` / `mergeTableCells` / `splitTableCell` / `fitTableHeights` / `setTabs` / `setActiveTab` | 表格/选项卡专用（v0.4） | 见 §6.5 |
 | `getMindData` / `getMindTree` / `setMindData` / `setMindNodeText` / `addMindNode` / `deleteMindNode` / `updateMindNode` / `setMindTemplate` / `setMindTheme` | 思维导图专用（v0.5） | 见 §6.6 |
 | `getTextInfo` / `setTextContent` / `setTextAdaptive` / `fitTextSize` | 文本专用（v0.6，含宽高自适应与组内联动） | 见 §6.7 |
 | `orderElement(payload)` | `{ elementId, position }`，position ∈ front/forward/backward/back | 无 |
@@ -168,6 +168,7 @@ await b.ungroup(r.groupId)                         // 解开组，子元素回�
 | `insertTableColumn({ tableId, index })` / `deleteTableColumn({ tableId, index, count? })` | 0 基 | 插入/删除列（自动处理合并跨列） |
 | `mergeTableCells({ tableId, startRow, startCol, endRow, endCol })` | 0 基含边界 | 合并矩形区域（区域内不能有既有合并/被覆盖格） |
 | `splitTableCell({ tableId, row, col })` | 0 基 | 拆分合并格（必须传合并起点格坐标） |
+| `fitTableHeights({ tableId, waitMs?=2000, minHeight?=30 })` | - | 行高自适应：按单元格实际内容高度重算每行最小高度并写回 `heights`（等效逐行拖拽收缩），自动处理 rowspan 合并单元格 |
 
 ```js
 // 标准流程：读 → 改 → 核对
@@ -182,6 +183,7 @@ await b.getTableGrid({ tableId: "V3MFeGf4Pi" })   // 核对
 - 被合并覆盖的格子（`isCovered: true`）不可写内容，写合并起点格（`isOrigin: true`）。
 - 行列增删/合并拆分是**结构操作**，改动前先 `checkpoint()`，出错 `rollback()`。
 - 删除行/列时若覆盖到合并格，算法自动调整 rowspan/colspan（与编辑器右键菜单同语义）。
+- 行高只增不减：编辑器对内容变高自动撑大行高，但变瘮不收缩。字号/内容缩小后（如统一缩放字号），用 `fitTableHeights` 收紧行高，避免留下大片空白；表格缩短后注意同区块内其他元素（如底部图片）是否需要随之调整位置。
 
 ﻿## 6.6 思维导图操控（数据模型与流程）
 
@@ -275,6 +277,32 @@ await b.setTextContent({ elementId: "xxx", content: "多行文本\n第二行" })
 - 内容含公式/图片时自适应同样生效（隐藏测量层与编辑渲染一致）。
 - `moved` 是操作前后同区块元素的几何 diff，包含组内位移；非组内元素不会联动。
 
+## 6.8 文本操控验证记录（2026-08-01 真实画布实测）
+
+> 以下结论在真实画布（区块内文本元素、fontSize 14、lineHeight 1.5）实测得出；字体/行距/字号不同时数值会变化，但行为规则一致。
+
+**换行行为**
+- `setTextContent` 纯文本按 `\n` 自动拆成多段 `<p>`（每行一个段落，与编辑器 Quill 输出一致）；不要再依赖单个段落内嵌 `<br>` 实现换行。
+- 多行时 `horizontal` 宽度按**最长一行**计算；`vertical` 高度按**行数 × 行高**增长（实测 4 行 → 高度 84，单行约 21）。
+- 空文本在 `vertical`/`both` 下会收缩到约一行高度（实测约 21），属正常行为。
+
+**自适应模式差异（实测）**
+| extendType | 实测行为 |
+|------|------|
+| `both`（默认） | 宽高都随内容，内容变多变宽同步扩展 |
+| `horizontal` | 仅宽度随内容伸缩（取最长行），高度锁定（实测宽 120→476→840，高始终不变） |
+| `vertical` | 仅高度随内容伸缩（行数 × 行高），宽度锁定（实测高 21→84，宽始终不变） |
+| `none` | 不自动调整，保持手动宽高 |
+
+**组内联动（实测）**
+- 组内（`groupId` 非 0）正下方元素随文本高度变化**同量下移**（实测文本高 +54 → 下方图形 top +54）；组内右侧元素随宽度变化右移。
+- 组外元素不受影响（实测同区块组外元素坐标零变化）。
+- 三个方法返回的 `moved` 列表即全部受影响元素（含自身），可直接核对 `dLeft/dTop/dWidth/dHeight`。
+
+**使用建议**
+- 需要"先批量写内容、再统一适应"时：多次 `setTextContent(..., { fitSize: false })`，最后 `fitTextSize()` 一次重测。
+- 改内容/模式后尺寸未按预期变化，优先检查：① `getTextInfo().background.extendType` 是否生效；② 是否设置了 `maxWidth/maxHeight` 上限；③ 背景图为 image 时的宽高下限约束。
+
 ## 7. 常见坑
 
 - 元素 id 参数都是**标量**；`updateElement({ elementId, patch })` 的 patch 是**浅合并**，嵌套对象（如 background/outline）需整体传入。

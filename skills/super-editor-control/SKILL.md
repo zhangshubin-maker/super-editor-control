@@ -19,7 +19,7 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 
 ## 1. 架构
 
-- **桥接层**（super-editor 仓库内实现）：`src/modules/contentEditor/aiControl/`，页面挂载 `window.__superEditor`，所有写操作走 Vuex action（保留撤销/重做与操作日志）。已实现 125 个方法（v0.4 表格 8 个 + batch；v0.5 思维导图 9 个；v0.6 文本读取/内容/自适应/重测 4 个）：查询（getBlock/getElement/listElements/getCanvasTree/getSlideStats/searchElements）、选中（selectElement(s)/getSelection）、视图（getViewport/setViewport/scrollCanvas/scrollToElement/scrollToBlock）、区块/元素/页面增删改查、快照回滚、保存截图。
+- **桥接层**（super-editor 仓库内实现）：`src/modules/contentEditor/aiControl/`，页面挂载 `window.__superEditor`，所有写操作走 Vuex action（保留撤销/重做与操作日志）。已实现 126 个方法（v0.4 表格 8 个 + batch；v0.5 思维导图 9 个；v0.6 文本读取/内容/自适应/重测 4 个；v0.7 表格行高自适应 fitTableHeights）：查询（getBlock/getElement/listElements/getCanvasTree/getSlideStats/searchElements）、选中（selectElement(s)/getSelection）、视图（getViewport/setViewport/scrollCanvas/scrollToElement/scrollToBlock）、区块/元素/页面增删改查、快照回滚、保存截图。
 - **同源 RPC 通道**（推荐）：页面默认轮询 `{origin}/ai-control/rpc`（dev server 已实现，生产由后端按 `assets/production-integration-spec.md` 提供），外部进程 POST `/ai-control/rpc/request` 长轮询等结果即可调用任意方法。无需 CDP、无需本地服务、无需认领标签。可用 `window.__SUPER_EDITOR_RPC_URL` 覆盖为独立本地服务（如 `http://127.0.0.1:8765`）。详见 `assets/bridge-api-spec.md` 6.5。
 - **插件 MCP**：`editor_*` 工具（50 个，v0.5 思维导图 4 个：editor_mind_*；v0.6 文本 4 个：editor_text_info / editor_text_set_content / editor_text_adaptive / editor_text_fit），统一走同源 RPC 通道，`editor_connect({ pageUrl })` 传课件 URL 即可，不依赖 CDP / 浏览器调试端口。
 - **浏览器控制**：`browser:control-in-app-browser` / `chrome:control-chrome` 提供页面读取与截图；注意其 evaluate 是**只读沙箱**，看不到 `window.__superEditor`，只用于探测 DOM 标记与截图。
