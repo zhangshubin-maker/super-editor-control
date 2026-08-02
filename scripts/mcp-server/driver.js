@@ -224,6 +224,83 @@ function mockResult(method, args = []) {
       return { elementId: arg.elementId, extendType: arg.extendType, previous: 'both', width: 200, height: 50, dWidth: 0, dHeight: 0, autoResized: false, moved: [] }
     case 'fitTextSize':
       return { elementId: arg.elementId, width: 200, height: 50, dWidth: 0, dHeight: 0, autoResized: false, moved: [] }
+    case 'getOutline':
+    case 'refreshOutline':
+      return {
+        slideId: String(arg.slideId || 'slide-1'),
+        outline: [
+          {
+            id: 'outline-1',
+            book_id: 'mock-book',
+            catalog_id: String(arg.slideId || 'slide-1'),
+            outline_name: '示例大纲（MOCK）',
+            parent_id: 0,
+            sort: 1,
+            content_uuids: ['block-1'],
+            children: [
+              {
+                id: 'outline-1-1',
+                book_id: 'mock-book',
+                catalog_id: String(arg.slideId || 'slide-1'),
+                outline_name: '子节点',
+                parent_id: 'outline-1',
+                sort: 1,
+                content_uuids: [],
+                children: []
+              }
+            ]
+          }
+        ],
+        selectedOutlineId: null
+      }
+    case 'addOutline':
+      return {
+        id: 'mock-outline-' + Date.now(),
+        outline_name: String(arg.name || '未命名'),
+        parent_id: arg.parentId || 0,
+        sort: arg.sort || 1,
+        content_uuids: []
+      }
+    case 'renameOutline':
+      return { outlineId: String(arg.outlineId), outline_name: String(arg.name || '') }
+    case 'deleteOutline':
+      return { outlineId: String(arg.outlineId), deleted: true }
+    case 'moveOutline':
+      return { outlineId: String(arg.outlineId), parentId: arg.parentId || 0, sort: arg.sort }
+    case 'linkOutlineBlocks':
+      return { outlineId: String(arg.outlineId), content_uuids: Array.isArray(arg.blockIds) ? arg.blockIds : [] }
+    case 'selectOutline':
+      return arg.outlineId || null
+    case 'getOutlineSelection':
+      return 'outline-1'
+    case 'getOutlineAnchors':
+      return {
+        outlineId: String(arg.outlineId),
+        anchors: [
+          {
+            id: 'anchor-1',
+            outline_id: String(arg.outlineId),
+            name: '位置锚点（MOCK）',
+            type: 1,
+            position_x: 0,
+            position_y: 10,
+            width: 0,
+            height: 0
+          }
+        ]
+      }
+    case 'addOutlineAnchor':
+      return {
+        outlineId: String(arg.outlineId),
+        anchorId: 'mock-anchor-' + Date.now(),
+        id: 'mock-anchor-' + Date.now(),
+        name: String(arg.name || '锚点'),
+        type: arg.type || 2
+      }
+    case 'updateOutlineAnchor':
+      return { anchorId: String(arg.id), updated: true }
+    case 'deleteOutlineAnchor':
+      return { outlineId: String(arg.outlineId), anchorId: String(arg.anchorId), deleted: true }
     case 'batch': {
       const steps = (args[0] && args[0].steps) || []
       return {

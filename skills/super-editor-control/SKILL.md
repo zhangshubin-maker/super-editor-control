@@ -14,6 +14,7 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 | `super-editor-blocks` | 区块增删改查、复制、移动、重命名、调尺寸、批量插入/替换/跨页复制 | addBlock / updateBlock / deleteBlock / moveBlock / cloneBlock / insertBlocks / replaceBlock / copyBlockToSlide |
 | `super-editor-elements` | 元素增删改查、属性与样式、批量、对齐/分布、选中、打组/解组、层级、**表格（读网格/改单元格/行列增删/合并拆分）**、选项卡 | addElement / updateElements / alignElements / setElementSpacing / setTextStyle / getTableGrid / setTableCellContent / mergeTableCells / groupElements 等 |
 | `super-editor-canvas` | 页面切换/增删/排序/重命名/复制、滚动定位/缩放、截图、**快照回滚（checkpoint/rollback，替代撤销重做）**、保存、整页备份导入 | scrollToBlock / setZoom / fitCanvas / renameSlide / duplicateSlide / exportSlide / screenshot / checkpoint / rollback / save |
+| `super-editor-outline` | 大纲（图层面板左侧「大纲」树）：读树、增删改查、移动排序、关联区块、锚点增删改查；支持读取任意目录大纲，为自动生成其他目录大纲打基础 | getOutline / addOutline / renameOutline / deleteOutline / moveOutline / linkOutlineBlocks / getOutlineAnchors / addOutlineAnchor 等（v0.8） |
 
 完整桥接契约见插件 `assets/bridge-api-spec.md`，接入步骤见 `assets/editor-integration-guide.md`。
 

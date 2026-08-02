@@ -19,6 +19,7 @@ description: 超媒编辑器（super-editor-control 插件）状态读取技能�
 | `ping()` | 无 | `{ version, editorType, bookId, mode }` |
 | `getState()` | 无 | 书本信息 + 全部页面 + 当前页 + 选中元素 + 脏状态 |
 | `listSlides()` | 无 | `[{ id, name, pageId }]`（同 getState().slides） |
+| `getOutline({ slideId? })` | 可选标量 | `{ slideId, outline: [大纲树], selectedOutlineId }`（目录级大纲；详见 `super-editor-outline` 技能，v0.8） |
 | `listTemplates(payload)` | `{ pageNo?, pageSize?, type?, name?, timeSort? }`（type：2=区块模板，3=样章模板） | `[{ id, name, type, parentId, cover }]` |
 | `getSlide(slideId)` | **标量** string/number | `{ slide: {...}, blocks: [...] }` |
 | `getBlock(blockId)` | 标量 uuid | `{ blockId, name, size, elements }`（单区块含元素树） |
@@ -96,4 +97,5 @@ text、image、shape、line、table、video、audio、mind（思维导图）、l
 | `getState()` | `editor_get_state` |
 | `listSlides()` | `editor_list_slides` |
 | `getSlide(slideId)` | `editor_get_slide` |
+| `getOutline({ slideId? })` | `editor_outline_info` |
 | `isDirty()` | 无（`editor_get_state` 返回 dirty） |

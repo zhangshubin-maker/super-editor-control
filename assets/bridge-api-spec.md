@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v0.7）
+# window.__superEditor 桥接 API 契约（v0.8）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -195,6 +195,40 @@
 - `steps[].method` 为桥接方法名，`args` 为参数数组（无参数传 `[]`）；步骤**按顺序串行**执行，每步完成后等渲染（nextTick），写操作安全。
 - `stopOnError=true`（默认）遇错即停并返回已执行结果；`false` 时收集全部结果继续。
 - 用法：把无依赖的独立小步骤合并成一次调用（如 `checkpoint → 批量改元素 → scrollToBlock → getSlide 核对`，或 `getState + getSlide + listBlocks` 一次读完），省去逐条调用的轮询/往返等待。
+
+### 大纲（outline，v0.8：图层面板左侧「大纲」树，目录级数据）
+
+大纲是编辑器图层面板左侧「大纲」标签下的树（`commonOutline` store），与画布元素不同：节点是目录级数据，**写操作即时调用后端接口持久化，不走 `save()`**；当前页写完后自动刷新本地大纲树。
+
+```js
+// outline 节点关键字段
+{ id, book_id, catalog_id, outline_name, parent_id, sort, content_uuids: [blockUuid], children: [...] }
+
+// outline anchor 关键字段
+{ id, book_id, catalog_id, outline_id, name, type /*1=位置锚点 2=检索锚点*/,
+  position_x, position_y, width, height, content_uuid, relative_position_x, relative_position_y }
+```
+
+| 方法 | 参数 | 返回 |
+|------|------|------|
+| `getOutline(payload?)` | `{ slideId? }`（省略=当前页；传任意 slideId 直接读取该目录大纲，不切换页面） | `{ slideId, outline: [节点树], selectedOutlineId }` |
+| `refreshOutline()` | 无 | 重新拉取当前页大纲并刷新 store，返回大纲树 |
+| `addOutline(payload?)` | `{ parentId?=0, sort?, name?="未命名", slideId? }` | 新节点 `{ id, outline_name, parent_id, sort, content_uuids }` |
+| `renameOutline(payload)` | `{ outlineId, name, slideId? }` | `{ outlineId, outline_name }` |
+| `deleteOutline(payload)` | `{ outlineId, slideId? }` | `{ outlineId, deleted: true }` |
+| `moveOutline(payload)` | `{ outlineId, parentId?=0, sort, slideId? }`（sort 从 1 开始） | `{ outlineId, parentId, sort }` |
+| `linkOutlineBlocks(payload)` | `{ outlineId, blockIds: [blockUuid], slideId? }`（整体替换关联区块） | `{ outlineId, content_uuids }` |
+| `selectOutline(outlineId)` | string（传 null 清空选中） | 当前选中 outlineId |
+| `getOutlineSelection()` | 无 | 当前选中 outlineId |
+| `getOutlineAnchors(payload)` | `{ outlineId }` | `{ outlineId, anchors: [...] }` |
+| `addOutlineAnchor(payload)` | `{ outlineId, name?="锚点", type?=2, positionX?=0, positionY?=0, width?=0, height?=0, slideId? }` | `{ outlineId, ...接口返回 }` |
+| `updateOutlineAnchor(anchor)` | 完整锚点对象（必须含 `id`） | `{ anchorId, updated: true }` |
+| `deleteOutlineAnchor(payload)` | `{ outlineId, anchorId }` | `{ outlineId, anchorId, deleted: true }` |
+
+- 读取其他目录的大纲（`getOutline({ slideId })`）不切换当前页面，适合「先读一个已做好的目录大纲，再自动生成其他目录大纲」的工作流。
+- 跨目录**写**当前版本走「`selectSlide(目标页)` → `refreshOutline()` → `addOutline/renameOutline/...`」；如需不切换页面直接写任意目录，可在桥接层再扩展。
+- 大纲关联的 `blockIds` 是本页区块模板的 `uuid`（用 `listBlocks` / `getCanvasTree` 获取）。
+- 锚点编辑与编辑器 UI 一致：`updateOutlineAnchor` 走 `saveanchor` 接口；位置锚点（type=1）由 UI 按关联区块自动维护，AI 通常只增删改检索锚点（type=2）。
 
 ### 表格 / 选项卡 / 思维导图 / 文本
 

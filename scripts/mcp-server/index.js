@@ -4,7 +4,7 @@
 import { createInterface } from 'node:readline'
 import * as driver from './driver.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.1.0' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.2.0' }
 
 const TOOLS = [
   {
@@ -585,6 +585,151 @@ const TOOLS = [
       additionalProperties: false
     }
   },
+  {
+    name: 'editor_outline_info',
+    description: '读取大纲：返回当前页（或指定 slideId 目录）的大纲树 { slideId, outline, selectedOutlineId }。大纲是图层面板左侧「大纲」树的目录级数据，节点含 id/outline_name/parent_id/sort/content_uuids/children。',
+    inputSchema: {
+      type: 'object',
+      properties: { slideId: { type: 'string', description: '目标目录 id，省略=当前页；传任意目录可直接读取（不切换页面）' } },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_refresh',
+    description: '重新从服务端拉取当前页大纲并刷新编辑器大纲树，返回最新大纲树。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'editor_outline_add',
+    description: '新增大纲节点：parentId 省略=根节点，sort 省略=追加到同级末尾，name 省略=“未命名”。返回新节点 { id, outline_name, parent_id, sort, content_uuids }。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parentId: { type: 'string', description: '父节点 id，0/省略=根节点' },
+        sort: { type: 'number', description: '同级排序号（从 1 开始），省略=追加末尾' },
+        name: { type: 'string', description: '大纲名称，省略=“未命名”' },
+        slideId: { type: 'string', description: '目标目录 id，省略=当前页' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_rename',
+    description: '重命名大纲节点。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outlineId: { type: 'string', description: '大纲节点 id' },
+        name: { type: 'string', description: '新名称' },
+        slideId: { type: 'string', description: '目标目录 id，省略=当前页' }
+      },
+      required: ['outlineId', 'name'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_delete',
+    description: '删除大纲节点（含其子节点）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outlineId: { type: 'string', description: '大纲节点 id' },
+        slideId: { type: 'string', description: '目标目录 id，省略=当前页' }
+      },
+      required: ['outlineId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_move',
+    description: '移动/排序大纲节点：parentId 为目标父节点（0/省略=根节点），sort 为目标同级排序号（从 1 开始）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outlineId: { type: 'string', description: '大纲节点 id' },
+        parentId: { type: 'string', description: '目标父节点 id，0/省略=根节点' },
+        sort: { type: 'number', description: '目标位置同级排序号（从 1 开始）' },
+        slideId: { type: 'string', description: '目标目录 id，省略=当前页' }
+      },
+      required: ['outlineId', 'sort'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_link_blocks',
+    description: '设置大纲节点与区块的关联（整体替换）：blockIds 为当前页区块模板 uuid 列表（editor_list_blocks 获取），传 [] 清空关联。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outlineId: { type: 'string', description: '大纲节点 id' },
+        blockIds: { type: 'array', items: { type: 'string' }, description: '区块 uuid 列表' },
+        slideId: { type: 'string', description: '目标目录 id，省略=当前页' }
+      },
+      required: ['outlineId', 'blockIds'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_select',
+    description: '选中大纲节点（编辑器大纲树高亮），outlineId 传 null 清空选中。',
+    inputSchema: {
+      type: 'object',
+      properties: { outlineId: { type: ['string', 'null'], description: '大纲节点 id 或 null' } },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_anchor_list',
+    description: '查询某大纲节点下的锚点列表（type: 1=位置锚点，2=检索锚点）。',
+    inputSchema: {
+      type: 'object',
+      properties: { outlineId: { type: 'string', description: '大纲节点 id' } },
+      required: ['outlineId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_anchor_add',
+    description: '新增大纲锚点：type 1=位置锚点（一般由编辑器 UI 按关联区块自动维护）、2=检索锚点（默认）；positionX/positionY/width/height 单位与画布一致。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outlineId: { type: 'string', description: '大纲节点 id' },
+        name: { type: 'string', description: '锚点名称，默认“锚点”' },
+        type: { type: 'number', description: '1=位置锚点，2=检索锚点（默认 2）' },
+        positionX: { type: 'number', description: 'X 坐标，默认 0' },
+        positionY: { type: 'number', description: 'Y 坐标，默认 0' },
+        width: { type: 'number', description: '宽，默认 0' },
+        height: { type: 'number', description: '高，默认 0' },
+        slideId: { type: 'string', description: '目标目录 id，省略=当前页' }
+      },
+      required: ['outlineId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_anchor_update',
+    description: '修改大纲锚点：anchor 传完整锚点对象（必须含 id，可带 name/type/position_x/position_y/width/height 等），走编辑器 saveanchor 接口。',
+    inputSchema: {
+      type: 'object',
+      properties: { anchor: { type: 'object', description: '完整锚点对象，必须含 id' } },
+      required: ['anchor'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_outline_anchor_delete',
+    description: '删除大纲锚点。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outlineId: { type: 'string', description: '大纲节点 id' },
+        anchorId: { type: 'string', description: '锚点 id' }
+      },
+      required: ['outlineId', 'anchorId'],
+      additionalProperties: false
+    }
+  },
 ]
 
 class McpError extends Error {
@@ -815,6 +960,65 @@ async function callTool(name, args) {
       break
     case 'editor_text_fit':
       data = await driver.bridgeCall('fitTextSize', [{ elementId: args.elementId, waitMs: args.waitMs }])
+      break
+    case 'editor_outline_info':
+      data = await driver.bridgeCall('getOutline', [args.slideId ? { slideId: args.slideId } : {}])
+      break
+    case 'editor_outline_refresh':
+      data = await driver.bridgeCall('refreshOutline')
+      break
+    case 'editor_outline_add':
+      data = await driver.bridgeCall('addOutline', [
+        { parentId: args.parentId, sort: args.sort, name: args.name, slideId: args.slideId }
+      ])
+      break
+    case 'editor_outline_rename':
+      data = await driver.bridgeCall('renameOutline', [
+        { outlineId: args.outlineId, name: args.name, slideId: args.slideId }
+      ])
+      break
+    case 'editor_outline_delete':
+      data = await driver.bridgeCall('deleteOutline', [
+        { outlineId: args.outlineId, slideId: args.slideId }
+      ])
+      break
+    case 'editor_outline_move':
+      data = await driver.bridgeCall('moveOutline', [
+        { outlineId: args.outlineId, parentId: args.parentId, sort: args.sort, slideId: args.slideId }
+      ])
+      break
+    case 'editor_outline_link_blocks':
+      data = await driver.bridgeCall('linkOutlineBlocks', [
+        { outlineId: args.outlineId, blockIds: args.blockIds, slideId: args.slideId }
+      ])
+      break
+    case 'editor_outline_select':
+      data = await driver.bridgeCall('selectOutline', [args.outlineId])
+      break
+    case 'editor_outline_anchor_list':
+      data = await driver.bridgeCall('getOutlineAnchors', [{ outlineId: args.outlineId }])
+      break
+    case 'editor_outline_anchor_add':
+      data = await driver.bridgeCall('addOutlineAnchor', [
+        {
+          outlineId: args.outlineId,
+          name: args.name,
+          type: args.type,
+          positionX: args.positionX,
+          positionY: args.positionY,
+          width: args.width,
+          height: args.height,
+          slideId: args.slideId
+        }
+      ])
+      break
+    case 'editor_outline_anchor_update':
+      data = await driver.bridgeCall('updateOutlineAnchor', [args.anchor])
+      break
+    case 'editor_outline_anchor_delete':
+      data = await driver.bridgeCall('deleteOutlineAnchor', [
+        { outlineId: args.outlineId, anchorId: args.anchorId }
+      ])
       break
     case 'editor_batch':
       data = await driver.bridgeCall('batch', [{ steps: args.steps, stopOnError: args.stopOnError }])
