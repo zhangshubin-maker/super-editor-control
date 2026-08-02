@@ -45,6 +45,7 @@ node index.js
 | `editor_text_info` / `editor_text_set_content` / `editor_text_adaptive` / `editor_text_fit` | 文本：读结构/自适应模式、改内容并触发宽高自适应、切 extendType、强制重测（含组内联动位移返回） |
 | `editor_outline_info` / `editor_outline_refresh` / `editor_outline_add` / `editor_outline_rename` / `editor_outline_delete` / `editor_outline_move` / `editor_outline_link_blocks` / `editor_outline_select` | 大纲：读当前/任意目录大纲树、刷新、增删改查、移动排序、关联区块、选中节点（v0.8） |
 | `editor_outline_anchor_list` / `editor_outline_anchor_add` / `editor_outline_anchor_update` / `editor_outline_anchor_delete` | 大纲锚点：查询 / 新增 / 修改 / 删除（type 1=位置锚点，2=检索锚点） |
+| `editor_upload_image` / `editor_add_image_element` / `editor_set_image_src` | 图片：上传本地图片（路径或 base64）获取 url、上传并新增图片元素、上传并替换图片 src（v0.9，配合模型生图能力使用） |
 | `editor_batch` | 批量执行多步骤（一次往返串行执行 `steps: [{ method, args }]`，一次返回全部结果；`stopOnError` 默认遇错即停） |
 | `editor_screenshot` | 画布截图（走桥接 `screenshot()`，data URL） |
 

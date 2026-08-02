@@ -2,9 +2,39 @@
 // 页面带 ai_control=1 打开时，轮询 {origin}/ai-control/rpc（dev server / 后端提供）。
 // 设置环境变量 SUPER_EDITOR_MOCK=1 可进入 mock 模式（不连接编辑器，便于测试 MCP 服务本身）。
 
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+
 const MOCK = process.env.SUPER_EDITOR_MOCK === '1'
 
 let active = null // { mode: 'rpc'|'mock', origin, pageUrl }
+
+const MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml'
+}
+
+// 把本地图片路径读取为 dataURL；已有 data/base64 时原样透传
+async function resolveImageInput(args = {}) {
+  const out = { ...args }
+  if (!out.imagePath) return out
+  if (MOCK) {
+    out.data = 'data:image/png;base64,mock'
+    return out
+  }
+  const filePath = path.resolve(out.imagePath)
+  const buf = await readFile(filePath)
+  const ext = path.extname(filePath).toLowerCase()
+  const mime = MIME_BY_EXT[ext] || 'image/png'
+  out.data = `data:${mime};base64,${buf.toString('base64')}`
+  out.mimeType = out.mimeType || mime
+  out.fileName = out.fileName || path.basename(filePath)
+  return out
+}
 
 export function isMock() {
   return MOCK
@@ -96,6 +126,21 @@ export async function captureScreenshot(opts = {}) {
   const data = await bridgeCall('screenshot', [opts])
   if (typeof data === 'string' && data.startsWith('data:image')) return data
   throw new Error('桥接 screenshot 不可用（fullPage 拼接失败或浏览器不支持 html-to-image）')
+}
+
+export async function uploadImage(args = {}) {
+  const a = await resolveImageInput(args)
+  return bridgeCall('uploadImage', [a])
+}
+
+export async function addImageElement(args = {}) {
+  const a = await resolveImageInput(args)
+  return bridgeCall('addImageElement', [a])
+}
+
+export async function setImageElementSrc(args = {}) {
+  const a = await resolveImageInput(args)
+  return bridgeCall('setImageElementSrc', [a])
 }
 
 const TINY_PNG_DATA_URL =
@@ -301,6 +346,22 @@ function mockResult(method, args = []) {
       return { anchorId: String(arg.id), updated: true }
     case 'deleteOutlineAnchor':
       return { outlineId: String(arg.outlineId), anchorId: String(arg.anchorId), deleted: true }
+    case 'uploadImage':
+      return {
+        url: 'https://mock.example.com/upload/ai-image-' + Date.now() + '.png',
+        fileId: 'mock-file-' + Date.now(),
+        fileName: String(arg.fileName || 'ai-image.png')
+      }
+    case 'addImageElement':
+      return {
+        url: String(arg.url || 'https://mock.example.com/upload/ai-image-' + Date.now() + '.png'),
+        elementId: 'mock-el-' + Date.now()
+      }
+    case 'setImageElementSrc':
+      return {
+        url: String(arg.url || 'https://mock.example.com/upload/ai-image-' + Date.now() + '.png'),
+        elementId: String(arg.elementId)
+      }
     case 'batch': {
       const steps = (args[0] && args[0].steps) || []
       return {

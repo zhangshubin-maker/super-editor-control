@@ -1,6 +1,6 @@
 {
   "name": "super-editor-control-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Zero-dependency MCP server that drives the Super Media Editor via same-origin RPC and window.__superEditor.",
   "type": "module",

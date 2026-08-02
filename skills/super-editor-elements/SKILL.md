@@ -277,6 +277,31 @@ await b.setTextContent({ elementId: "xxx", content: "多行文本\n第二行" })
 - 内容含公式/图片时自适应同样生效（隐藏测量层与编辑渲染一致）。
 - `moved` 是操作前后同区块元素的几何 diff，包含组内位移；非组内元素不会联动。
 
+## 6.6 图片上传与使用（v0.9，配合模型生图能力）
+
+生图 → 上传 → 放进课件的完整链路（上传走编辑器 uploadfile 通道，页面内自动带登录态）：
+
+```js
+// 1) 只上传：base64/dataURL -> { url, fileId }
+const { url } = await b.uploadImage({ data: 'data:image/png;base64,...' })
+
+// 2) 上传并新增图片元素（最常用）
+const { url, elementId } = await b.addImageElement({
+  blockId: 'w8fecasuXh12582',
+  data: 'data:image/png;base64,...',   // 或 imagePath（MCP 侧读取本地文件）
+  left: 100, top: 80, width: 300, height: 200
+})
+
+// 3) 替换已有 image/video 元素的图
+await b.setImageElementSrc({ elementId: 'xxx', data: 'data:image/png;base64,...' })
+```
+
+- 只传 `url` 时不触发上传（可用外链或媒体库已有地址）。
+- MCP 工具：`editor_upload_image`（imagePath/data → url）、`editor_add_image_element`（上传 + 新增元素）、`editor_set_image_src`（上传 + 替换 src）。
+- 生成图片优先 PNG；大图注意服务端大小/敏感内容限制，失败重试或换提示词。
+- 图片元素默认 `fixedRatio: true` 保持宽高比；排版用 `moveElement/resizeElement/rotateElement`。
+- 文本背景图/思维导图节点图等场景：先 `uploadImage` 拿 url，再 `updateElement` patch `background.image` / 节点 `image` 字段。
+
 ## 6.8 文本操控验证记录（2026-08-01 真实画布实测）
 
 > 以下结论在真实画布（区块内文本元素、fontSize 14、lineHeight 1.5）实测得出；字体/行距/字号不同时数值会变化，但行为规则一致。
@@ -321,6 +346,7 @@ await b.setTextContent({ elementId: "xxx", content: "多行文本\n第二行" })
 | `orderElement` | `editor_order_element` |
 | `getTableInfo` / `getTableGrid` | `editor_table_info` |
 | `setTableCellContent` / `setTableCellBackground` | `editor_table_set_cell` |
+| `uploadImage` / `addImageElement` / `setImageElementSrc` | `editor_upload_image` / `editor_add_image_element` / `editor_set_image_src` |
 | `updateTable` | `editor_table_update` |
 | `insertTableRow` / `deleteTableRow` / `insertTableColumn` / `deleteTableColumn` / `mergeTableCells` / `splitTableCell` | `editor_table_structure` |
 | `getMindData` / `getMindTree` | `editor_mind_info` |

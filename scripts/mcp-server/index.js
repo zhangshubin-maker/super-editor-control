@@ -4,7 +4,7 @@
 import { createInterface } from 'node:readline'
 import * as driver from './driver.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.2.0' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.3.0' }
 
 const TOOLS = [
   {
@@ -730,6 +730,60 @@ const TOOLS = [
       additionalProperties: false
     }
   },
+  {
+    name: 'editor_upload_image',
+    description: '上传本地图片到课件媒体库（走编辑器 uploadfile 通道）：imagePath 传本地 PNG/JPG/WebP/GIF 文件路径，或 data 直接传 base64/dataURL。返回 { url, fileId, fileName }，url 可用于新增/替换图片元素、设置背景图等。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        imagePath: { type: 'string', description: '本地图片文件路径（与 data 二选一）' },
+        data: { type: 'string', description: 'base64 或 dataURL 图片数据（与 imagePath 二选一）' },
+        fileName: { type: 'string', description: '上传文件名，默认 ai-image.png' },
+        mimeType: { type: 'string', description: '图片 MIME，默认按扩展名/数据自动识别' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_add_image_element',
+    description: '上传图片并在指定区块新增图片元素：传 url 直接用已有地址；传 imagePath/data 会自动上传后再放入课件。返回 { url, elementId }，随后可用 move/resize/rotate 排版。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockId: { type: 'string', description: '目标区块 uuid（editor_list_blocks 获取）' },
+        url: { type: 'string', description: '已有图片地址（与 imagePath/data 二选一）' },
+        imagePath: { type: 'string', description: '本地图片文件路径（与 url/data 二选一）' },
+        data: { type: 'string', description: 'base64 或 dataURL 图片数据' },
+        fileName: { type: 'string', description: '上传文件名' },
+        mimeType: { type: 'string', description: '图片 MIME' },
+        left: { type: 'number', description: 'X 坐标（画布单位）' },
+        top: { type: 'number', description: 'Y 坐标' },
+        width: { type: 'number', description: '宽' },
+        height: { type: 'number', description: '高' },
+        name: { type: 'string', description: '元素名' },
+        fixedRatio: { type: 'boolean', description: '保持宽高比，默认 true' }
+      },
+      required: ['blockId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_set_image_src',
+    description: '上传图片并替换已有 image/video 元素的 src：传 url 直接用已有地址；传 imagePath/data 会自动上传。返回 { url, elementId }。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', description: 'image/video 元素 id' },
+        url: { type: 'string', description: '已有图片地址（与 imagePath/data 二选一）' },
+        imagePath: { type: 'string', description: '本地图片文件路径' },
+        data: { type: 'string', description: 'base64 或 dataURL 图片数据' },
+        fileName: { type: 'string', description: '上传文件名' },
+        mimeType: { type: 'string', description: '图片 MIME' }
+      },
+      required: ['elementId'],
+      additionalProperties: false
+    }
+  },
 ]
 
 class McpError extends Error {
@@ -1019,6 +1073,15 @@ async function callTool(name, args) {
       data = await driver.bridgeCall('deleteOutlineAnchor', [
         { outlineId: args.outlineId, anchorId: args.anchorId }
       ])
+      break
+    case 'editor_upload_image':
+      data = await driver.uploadImage(args)
+      break
+    case 'editor_add_image_element':
+      data = await driver.addImageElement(args)
+      break
+    case 'editor_set_image_src':
+      data = await driver.setImageElementSrc(args)
       break
     case 'editor_batch':
       data = await driver.bridgeCall('batch', [{ steps: args.steps, stopOnError: args.stopOnError }])

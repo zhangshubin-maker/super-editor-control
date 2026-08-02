@@ -6,6 +6,7 @@
 
 - `skills/super-editor-control/SKILL.md` — 核心技能：连接编辑器、调用桥接 API 的工作流与规则。
 - `skills/super-editor-outline/SKILL.md` — 大纲（图层面板左侧「大纲」树）技能：增删改查、移动排序、关联区块、锚点操控（v0.8）。
+- 图片上传与使用（v0.9）：`editor_upload_image` / `editor_add_image_element` / `editor_set_image_src`，把本地生成图片上传到课件媒体库并放入画布（配合模型生图能力）。
 - `.mcp.json` + `scripts/mcp-server/` — 零依赖 Node MCP 服务端，通过同源 RPC 通道连接编辑器页面，把 `window.__superEditor` 包装成结构化工具（`editor_*`）。
 - `assets/bridge-api-spec.md` — `window.__superEditor` 桥接 API 契约（编辑器侧需要实现的接口）。
 - `assets/editor-integration-guide.md` — 在 super-editor 仓库内实现桥接层的逐步指南。

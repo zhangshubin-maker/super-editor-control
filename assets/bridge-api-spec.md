@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v0.8）
+# window.__superEditor 桥接 API 契约（v0.9）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -229,6 +229,21 @@
 - 跨目录**写**当前版本走「`selectSlide(目标页)` → `refreshOutline()` → `addOutline/renameOutline/...`」；如需不切换页面直接写任意目录，可在桥接层再扩展。
 - 大纲关联的 `blockIds` 是本页区块模板的 `uuid`（用 `listBlocks` / `getCanvasTree` 获取）。
 - 锚点编辑与编辑器 UI 一致：`updateOutlineAnchor` 走 `saveanchor` 接口；位置锚点（type=1）由 UI 按关联区块自动维护，AI 通常只增删改检索锚点（type=2）。
+
+### 图片上传与使用（v0.9：生图 → 上传 → 放入课件）
+
+图片上传复用项目标准 `upLoadFile`（uploadfile）通道，在编辑器页面内携带登录态完成；调用方只需传 base64 / dataURL 图片数据或直接传 url。
+
+| 方法 | 参数 | 返回 |
+|------|------|------|
+| `uploadImage(payload)` | `{ data, fileName?="ai-image.png", mimeType?="image/png" }`（data 支持纯 base64 或 dataURL） | `{ url, fileId, fileName }` |
+| `addImageElement(payload)` | `{ blockId, url?, data?, left?, top?, width?, height?, name?, fixedRatio?=true }`（传 data 时自动先上传） | `{ url, elementId }` |
+| `setImageElementSrc(payload)` | `{ elementId, url?, data? }`（image/video 元素；传 data 时自动先上传） | `{ url, elementId }` |
+
+- 只传 `url` 时不触发上传，适合直接使用外链或媒体库已有地址。
+- 上传返回的 `url` 可直接作为图片元素 `src`、文本背景图 `background.image`（经 `updateElement` patch）或思维导图节点 `image`。
+- 推荐工作流（模型具备生图能力后）：生成本地 PNG → MCP `editor_upload_image`（传 `imagePath`）或桥接 `uploadImage` → `editor_add_element(type=image, payload={src})` 或 `addImageElement` → `moveElement/resizeElement` 排版。
+- 上传接口失败会抛错并返回服务端信息；图片过大（>10MB）或敏感内容被服务端拦截时请重试/调整提示词。
 
 ### 表格 / 选项卡 / 思维导图 / 文本
 
