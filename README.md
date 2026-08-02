@@ -15,12 +15,33 @@
 - super-editor 已在本机运行，且已按 `assets/editor-integration-guide.md` 实现桥接层（`ai_control=1` 时挂载 `window.__superEditor`）。
 - 编辑器页面已带 `ai_control=1` 打开（dev server 内置同源 RPC 路由；生产按 `assets/production-integration-spec.md` 提供）。
 
-## 使用
 
-1. 安装插件（personal marketplace 已生成）：`codex plugin add super-editor-control@personal`
+## Node 运行时（免安装）
+
+MCP 服务端需要 Node >= 22。Codex 桌面应用自带 Node 运行时，`.mcp.json` 默认使用官方写法（`command: "node"` + `cwd: "."`），由 Codex 用捆绑运行时解析，使用者无需单独安装 Node。
+
+若目标环境无法解析 `node`（未使用捆绑运行时），运行兜底脚本生成带绝对路径的配置：
+
+- Windows：`powershell -ExecutionPolicy Bypass -File scripts/setup-mcp.ps1`
+- macOS / Linux：`bash scripts/setup-mcp.sh`
+
+脚本会按顺序探测：环境变量 `SUPER_EDITOR_NODE` > Codex 捆绑的 Node > 系统 PATH 中的 Node，校验主版本 >= 22 后生成 `.mcp.json`（原文件自动备份为 `.mcp.json.bak`）。生成后需重启 Codex 生效。
+## 安装
+
+**本机个人使用**（personal marketplace 已生成）：
+
+1. `codex plugin add super-editor-control@personal`
 2. 新开一个 Codex 会话（技能与 MCP 工具在新会话中生效）。
 3. 让 Codex 打开课件链接（带 `ai_control=1`），或直接让它使用 `editor_connect({ pageUrl })`。
-4. 用自然语言下达任务，例如“把这页的标题改成蓝色并居中”。
+
+**Git 市场发布版**（本仓库即插件市场，`.agents/plugins/marketplace.json`）：
+
+1. 注册市场：`codex plugin marketplace add <owner>/super-editor-control`（私有仓库填 Git URL 也可）
+2. 安装插件：`codex plugin add super-editor-control@super-editor-control`
+3. 桌面 App 用户：打开「插件目录」→ 选择对应 marketplace → 安装。
+4. 新开会话后即可使用，用法同上。
+
+更新插件：推送新版本到仓库后，使用者执行 `codex plugin update`（或重新安装）。
 
 ## 开发
 

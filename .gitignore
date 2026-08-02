@@ -1,0 +1,10 @@
+# 本地备份（setup-mcp 生成的绝对路径配置与备份，勿提交）
+.mcp.json.bak*
+*.bak
+
+# 依赖与日志
+node_modules/
+*.log
+
+# 本地运行产物
+.mcp.local.json

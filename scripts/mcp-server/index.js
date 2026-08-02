@@ -221,10 +221,13 @@ const TOOLS = [
   },
   {
     name: 'editor_screenshot',
-    description: '截图当前画布（走桥接 screenshot()），返回 data URL。注意：无 CDP 整页截图，html2canvas 只含已渲染区块；需要整页效果时先滚动分段截图或直接用浏览器技能。',
+    description: '截图画布并返回 PNG 图片（模型可直接看到效果，用于排版/视觉核对）。默认截当前视口；fullPage=true 截全部区块拼接为整页；blockId 指定单个区块（uuid）。注意：canvas 类区块（四线三格、手写格）和跨域图片可能渲染为空，请结合 editor_canvas_tree 数值核对。',
     inputSchema: {
       type: 'object',
-      properties: { fullPage: { type: 'boolean', description: '是否整页截图' } },
+      properties: {
+        fullPage: { type: 'boolean', description: 'true 时拼接全部区块为整页截图' },
+        blockId: { type: 'string', description: '只截指定区块（template uuid）' }
+      },
       additionalProperties: false
     }
   },
@@ -675,7 +678,7 @@ async function callTool(name, args) {
       data = await driver.bridgeCall('save')
       break
     case 'editor_screenshot':
-      data = await driver.captureScreenshot({ fullPage: !!args.fullPage })
+      data = await driver.captureScreenshot({ fullPage: !!args.fullPage, blockId: args.blockId || null })
       break
     case 'editor_get_canvas_tree':
       data = await driver.bridgeCall('getCanvasTree')
@@ -822,6 +825,12 @@ async function callTool(name, args) {
 
     default:
       throw new McpError(-32601, 'Unknown tool: ' + name)
+  }
+  // 截图工具返回 MCP image 内容块，模型可直接看到图片（排版/视觉核对）
+  if (name === 'editor_screenshot' && typeof data === 'string' && data.startsWith('data:image')) {
+    return {
+      content: [{ type: 'image', data: data.slice(data.indexOf(',') + 1), mimeType: 'image/png' }]
+    }
   }
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
   return { content: [{ type: 'text', text }] }

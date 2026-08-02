@@ -1,0 +1,20 @@
+{
+  "name": "super-editor-control",
+  "interface": {
+    "displayName": "Super Editor Control"
+  },
+  "plugins": [
+    {
+      "name": "super-editor-control",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

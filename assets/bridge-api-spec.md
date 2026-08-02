@@ -239,7 +239,7 @@
 | `replaceSlideContent(slideId, blocks)` | `(string, 模板数组)` | `{ slideId, blockIds }`（清空目标页后重建；传空数组=清空页面） |
 | `getBridgeInfo()` | 无 | `{ version, instanceId, bookId, methods }`（methods 为全部可用方法名） |
 | `batch(payload)` | `{ steps: [{ method, args }], stopOnError? }` | `{ results: [{ index, method, ok, value/error }], stopped, stoppedAt }`（一次往返串行执行多步，见下） |
-| `screenshot()` | 无 | `data:image/png;base64,...`（画布可视区域） |
+| `screenshot(payload)` | `{ fullPage?, blockId? }` | `data:image/png;base64,...`（默认当前视口；`fullPage: true` 全部区块拼接整页；`blockId` 指定单区块） |
 
 ## 5. 实现注意事项
 
@@ -306,7 +306,7 @@
 ```
 
 ### 7.4 画布渲染与验证
-- 编辑器画布是**虚拟滚动**：`#canvas-ref` 只渲染可视区块，`screenshot()`（html2canvas）只能捕获已渲染部分。
+- 编辑器画布是**虚拟滚动**：`#canvas-ref` 只渲染可视区块；`screenshot()` 用项目 `utils/html-to-image` 截图，`blockId` 模式定位 `#template-container-<uuid>`，`fullPage` 模式逐块截图拼接（ai_control 下区块全量渲染，均可截）。canvas 类区块（四线三格/手写格）与跨域图片可能渲染为空。
 - **滚动必须走桥接**：`scrollToBlock(blockId)` / `scrollToElement(elementId)` / `scrollCanvas({ deltaY })`（`scrollTop` 被自定义滚动接管，直接赋值无效；也不要用鼠标滚轮模拟）。
 - 元素坐标以 `getElement` / `listElements` 返回的 `left/top/width/height`（区块内相对坐标）为准；区块在画布中的绝对位置可用 `blockTemplateListTopMap` 换算。
 - 编辑前先 `getSlide` 全量 JSON 备份；保存后 `Page.reload` 再从服务端读取验证持久化。

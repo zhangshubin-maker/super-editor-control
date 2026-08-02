@@ -1,11 +1,10 @@
 {
-    "mcpServers":  {
-                       "super-editor":  {
-                                            "type":  "stdio",
-                                            "command":  "C:/Users/17909/AppData/Local/OpenAI/Codex/bin/node.exe",
-                                            "args":  [
-                                                         "C:/Users/17909/plugins/super-editor-control/scripts/mcp-server/index.js"
-                                                     ]
-                                        }
-                   }
+  "mcpServers": {
+    "super-editor": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./scripts/mcp-server/index.js"],
+      "cwd": "."
+    }
+  }
 }

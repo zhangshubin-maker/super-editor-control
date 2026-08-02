@@ -90,12 +90,12 @@ export async function bridgeCall(method, args = []) {
   return rpcBridgeCall(method, args)
 }
 
-export async function captureScreenshot() {
+export async function captureScreenshot(opts = {}) {
   if (MOCK) return TINY_PNG_DATA_URL
   if (!active) throw new Error('尚未连接编辑器页面：请先调用 editor_connect')
-  const data = await bridgeCall('screenshot')
+  const data = await bridgeCall('screenshot', [opts])
   if (typeof data === 'string' && data.startsWith('data:image')) return data
-  throw new Error('桥接 screenshot 不可用；可用浏览器工具对页面截图（RPC 模式无 CDP 整页截图）')
+  throw new Error('桥接 screenshot 不可用（fullPage 拼接失败或浏览器不支持 html-to-image）')
 }
 
 const TINY_PNG_DATA_URL =

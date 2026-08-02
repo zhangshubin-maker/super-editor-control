@@ -51,9 +51,13 @@ await b.clearCheckpoints()                                // 任务成功后清�
 
 ## 3. 截图与渲染核对
 
-### 3.1 截图限制（重要）
-- `screenshot()` 用 html2canvas 截取 `#canvas-ref`，**只包含当前已渲染的区块**（画布是虚拟滚动）。
-- 需要整页效果时：滚动分段截图，或直接读取 DOM 文本核对。
+### 3.1 截图能力与限制（重要）
+- `screenshot(opts)` 用项目 `utils/html-to-image`（toPng/toCanvas）截图，支持三种模式：
+  - `screenshot({})`：当前视口（`#canvas-ref`）
+  - `screenshot({ blockId })`：指定区块（`#template-container-<uuid>`；ai_control 模式区块全量渲染，任意区块可截）
+  - `screenshot({ fullPage: true })`：遍历全部区块逐块截图并纵向拼接为整页
+- MCP 工具 `editor_screenshot` 返回 **image 内容块**，模型可直接看到图片，用于排版/视觉核对。
+- 已知局限：canvas 类区块（四线三格、手写格）与跨域图片可能渲染为空；布局核对请结合 `editor_canvas_tree` 数值（left/top/width/height）双通道确认。
 
 ### 3.2 滚动定位与核对（画布虚拟滚动，必须走桥接）
 `scrollTop` 赋值无效（编辑器自定义滚动接管），**禁止用鼠标滚轮模拟**。一律用桥接方法：
@@ -80,9 +84,11 @@ await b.scrollToElement('RuAt6oqsOT')           // 定位到元素
 const vp = await b.getViewport()                // 确认视口
 ```
 
-### 3.3 截图（经桥接，替代 html2canvas）
+### 3.3 截图（经桥接）
 ```js
-// 桥接 screenshot() → data URL（仅含已渲染区块；整页效果先滚动分段截图）
+await b.screenshot({})                  // 当前视口
+await b.screenshot({ blockId: 'xxx' })  // 指定区块（template uuid）
+await b.screenshot({ fullPage: true })  // 整页拼接（34 区块约 5-10s）
 ```
 
 ## 4. 保存（save）
