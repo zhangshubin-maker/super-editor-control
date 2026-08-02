@@ -1,6 +1,6 @@
 {
   "name": "super-editor-control",
-  "version": "0.1.0+codex.20260802000544",
+  "version": "1.0.0",
   "description": "Drive the Super Media Editor (super-editor) from Codex: open courseware in a browser, inspect and edit slides/blocks/elements, group, undo/redo and save via a window bridge.",
   "author": {
     "name": "Super Editor Team"
