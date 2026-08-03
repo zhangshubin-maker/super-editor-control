@@ -1,7 +1,7 @@
 {
   "name": "super-editor-control",
-  "version": "1.0.0",
-  "description": "Drive the Super Media Editor (super-editor) from Codex: open courseware in a browser, inspect and edit slides/blocks/elements, group, undo/redo and save via a window bridge.",
+  "version": "1.0.0+codex.20260803074317",
+  "description": "Drive the Super Media Editor from Codex: search and clone books, jump between editors, inspect and edit courseware, and reuse templates, components and image assets.",
   "author": {
     "name": "Super Editor Team"
   },
@@ -9,8 +9,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Super Editor Control",
-    "shortDescription": "用 Codex 控制超媒编辑器完成课件创作与优化",
-    "longDescription": "通过浏览器画布 + window.__superEditor 桥接 API，让 Codex 像控制 Figma 一样控制超媒编辑器：实时查看画布、操作元素与区块、调整属性、保存与回退，自动化完成课件创作、编辑、修改和优化任务。",
+    "shortDescription": "\u7528 Codex \u63a7\u5236\u8d85\u5a92\u7f16\u8f91\u5668\u5b8c\u6210\u8bfe\u4ef6\u521b\u4f5c\u4e0e\u4f18\u5316",
+    "longDescription": "\u901a\u8fc7 window.__superEditor \u6865\u63a5 API\uff0c\u8ba9 Codex \u641c\u7d22\u548c\u514b\u9686\u4e66\u672c\u3001\u8df3\u8f6c\u7f16\u8f91\u5668\uff0c\u5e76\u5b9e\u65f6\u64cd\u4f5c\u753b\u5e03\u3001\u76ee\u5f55\u3001\u533a\u5757\u4e0e\u5143\u7d20\uff1b\u53ef\u590d\u7528\u6837\u7ae0\u3001\u533a\u5757\u3001\u7ec4\u4ef6\u548c\u56fe\u7247\u7d20\u6750\u5b8c\u6210\u8bfe\u4ef6\u521b\u4f5c\u3002",
     "developerName": "Super Editor Team",
     "category": "Productivity",
     "capabilities": [
@@ -19,9 +19,10 @@
       "Write"
     ],
     "defaultPrompt": [
-      "打开课件 AI 编辑模式",
-      "帮我新建一页课件并排版",
-      "优化当前课件的元素布局"
+      "\u6253\u5f00\u8bfe\u4ef6 AI \u7f16\u8f91\u6a21\u5f0f",
+      "\u5e2e\u6211\u65b0\u5efa\u4e00\u9875\u8bfe\u4ef6\u5e76\u6392\u7248",
+      "\u641c\u7d22\u4e00\u672c\u4e66\u5e76\u514b\u9686\u521b\u5efa\u65b0\u4e66",
+      "\u4f18\u5316\u5f53\u524d\u8bfe\u4ef6\u7684\u5143\u7d20\u5e03\u5c40"
     ]
   }
 }

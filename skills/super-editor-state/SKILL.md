@@ -20,7 +20,8 @@ description: 超媒编辑器（super-editor-control 插件）状态读取技能�
 | `getState()` | 无 | 书本信息 + 全部页面 + 当前页 + 选中元素 + 脏状态 |
 | `listSlides()` | 无 | `[{ id, name, pageId }]`（同 getState().slides） |
 | `getOutline({ slideId? })` | 可选标量 | `{ slideId, outline: [大纲树], selectedOutlineId }`（目录级大纲；详见 `super-editor-outline` 技能，v0.8） |
-| `listTemplates(payload)` | `{ pageNo?, pageSize?, type?, name?, timeSort? }`（type：2=区块模板，3=样章模板） | `[{ id, name, type, parentId, cover }]` |
+| `getUserInfo(payload?)` | `{ refresh? }` | 当前登录用户信息（素材权限判断） |
+| `searchTemplates(payload)` | `{ kind: chapter/block, query?, pageNo?, pageSize?, classifyId?, parentId? }` | 当前书本可用模板元数据；详细素材流程见 `super-editor-assets` |
 | `getSlide(slideId)` | **标量** string/number | `{ slide: {...}, blocks: [...] }` |
 | `getBlock(blockId)` | 标量 uuid | `{ blockId, name, size, elements }`（单区块含元素树） |
 | `listElements(filter?)` | `{ blockId?, type? }` | 扁平元素列表（id/name/type/left/top/width/height/blockId） |

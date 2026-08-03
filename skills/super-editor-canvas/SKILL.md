@@ -23,7 +23,7 @@ await b.moveSlide({ slideId: '3589', toIndex: 0 })
 ```
 
 - `addSlide`/`deleteSlide`/`moveSlide` 直接调目录接口**立即写库**（与区块/元素不同，没有"保存"缓冲），执行前必须确认。
-- `addSlide` 未传 `template_id` 时，桥接自动复用模板库空白样章模板，没有则自动创建一个空白样章模板（后端要求 `template_id >= 1`，空串会被拒绝）；若需按产品样章建页，可先用 `listTemplates({ type: 3 })` 查询模板列表再显式传 `template_id`。
+- `addSlide` 未传 `template_id` 时，桥接自动复用模板库空白样章模板，没有则自动创建一个空白样章模板（后端要求 `template_id >= 1`，空串会被拒绝）。自主设计新目录时先加载 `super-editor-assets`，用 `editor_search_templates({ kind: 'chapter' })` 选型，再用 `editor_apply_template({ kind: 'chapter', ... })` 新增。
 - 切换页面会丢弃未保存的当前页内存改动吗？不会——但建议先 `save()` 当前页再切换，避免混淆。
 
 ## 2. 快照 / 回滚 / 脏状态（ai_control 专用，替代撤销/重做）
@@ -116,4 +116,5 @@ if (dirty) {
 | `checkpoint` / `rollback` / `listCheckpoints` / `clearCheckpoints` | `editor_checkpoint` / `editor_rollback` / `editor_list_checkpoints` / `editor_clear_checkpoints` |
 | `save` | `editor_save` |
 | `screenshot` | `editor_screenshot` |
-| `addSlide` / `deleteSlide` / `moveSlide` / `canUndo`（已禁用） | `editor_rpc_call` |
+| `addSlide`（空白）/ `deleteSlide` / `moveSlide` / `canUndo`（已禁用） | `editor_rpc_call` |
+| `applyTemplate({ kind: 'chapter', ... })` | `editor_apply_template` |

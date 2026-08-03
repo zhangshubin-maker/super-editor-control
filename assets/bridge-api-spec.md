@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v0.9）
+# window.__superEditor 桥接 API 契约（v1.2）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -62,7 +62,17 @@
 | `ping()` | 无 | `{ version, editorType, bookId, mode }` |
 | `getState()` | 无 | 见上 |
 | `listSlides()` | 无 | `[{ id, name, pageId }]` |
-| `listTemplates(payload)` | `{ pageNo?, pageSize?, type?, name?, timeSort? }`（type：2=区块模板，3=样章模板） | `[{ id, name, type, parentId, cover }]` |
+| `getUserInfo(payload?)` | `{ refresh? }` | 当前登录用户信息；优先读 Vuex，缺失或 refresh 时请求账号接口 |
+| `searchBooks(payload)` | `{ query?, bookType?=6, smartBookType?, subjectId?, gradeId?, period?, volume?, pageNo?, pageSize?, filters? }` | `{ items, pageNo, pageSize, total, paginator }`；调用 `getbooklist`，结果补充 `smart_book_type_name` |
+| `getBookInfo(payload)` | `{ bookId }` | `getbookinfo` 完整书本属性、学科、关联教材、分类和版本信息 |
+| `buildBookEditorUrl(payload)` | `{ bookId, aiControl?=true, includeToken?=false }` | 继承当前编辑器环境的目标书本 URL |
+| `jumpToBook(payload)` | `{ bookId, target?: url/current/new, aiControl?, includeToken? }` | `{ bookId, url, target, scheduled?/opened? }` |
+| `createBookFromSource(payload)` | `{ sourceBookId, copyMode?: light/full, name?, backgroundName?, smartBookType?, coverImgId?, coverImgUrl?, coverType?, aiControl?, includeToken? }` | 默认 light 只继承外部属性；full 复制目录和内容。返回 `{ sourceBookId, bookId, copyMode, includesCatalogAndContent, cloneMethod, book, editorUrl }` |
+| `searchTemplates(payload)` | `{ kind?: chapter/block, query?, pageNo?, pageSize?, classifyId?, parentId?, timeSort? }` | 本书可用模板 `[{ id, name, type, kind, parentId, classifyId, cover, updatedAt }]` |
+| `listTemplates(payload)` | 同 `searchTemplates` | `searchTemplates` 兼容别名 |
+| `getTemplateDetail(payload)` | `{ templateId, parseContent? }` | `{ id, name, type, content, childList, lines }` |
+| `searchComponents(payload)` | `{ query?, scope?: all/system/mine, classifyType?, classifyId?, limit?, includeContent? }` | 可用组件元数据；默认不返回大体积 content |
+| `searchImageLibrary(payload)` | `{ query?, scope?: book/global/all, groupId?, bookId?, limit? }` | 图片素材 `[{ id, name, url, format, width, height, groupId, groupName, scope }]` |
 | `getSlide(slideId)` | string | 见上 |
 | `getBlock(blockId)` | string | `{ blockId, name, size, elements }`（单区块含元素树） |
 | `getElement(elementId)` | string | 元素完整数据（含 `blockId`） |
@@ -85,6 +95,7 @@
 |------|------|------|
 | `selectSlide(slideId)` | string | 无 |
 | `addSlide(payload)` | `{ name?, parentId?, template_id?, type? }`（不传 template_id 时自动复用/创建空白样章模板） | `{ slideId }` |
+| `applyTemplate(payload)` | `{ kind: chapter/block, templateId, name?, parentId?, index?, afterBlockId? }` | 样章返回 `{ slideId }`；区块返回 `{ templateId, blockId }` |
 | `deleteSlide(slideId)` | string | 无 |
 | `renameSlide(slideId, name)` | (string, string) | 无（目录重命名，即时生效） |
 | `duplicateSlide(slideId)` | string | `{ slideId }`（服务端复制整页含内容） |
@@ -107,12 +118,14 @@
 | `renameBlock(blockId, name)` | (string, string) | 无 |
 | `copyBlockToSlide(blockId, targetSlideId, opts?)` | `(string, string, { index? })` | `{ slideId, blockIds }`（跨页复制；目标页不同时当前页会切到目标页） |
 | `insertTemplate(templateData, index?)` | 模板结构对象 + 插入位置（省略追加末尾） | `blockId`（原样插入，元素 id 保留；用于恢复/迁移区块） |
+| `applyComponent(payload)` | `{ componentId, blockId, scope?, left?, top? }` | `{ componentId, elementIds }`（自动换 id、定位并记录使用历史） |
 
 ### 元素（element）
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
 | `addElement(payload)` | `{ blockId, type, payload }` | `elementId` |
+| `applyLibraryImage(payload)` | `{ imageId? or url?, blockId? or elementId?, scope?, left?, top?, width?, height?, name?, fixedRatio? }` | `{ imageId, url, elementId }`（新增或替换图片，并记录素材使用历史） |
 | `updateElement(payload)` | `{ elementId, patch }` | 无 |
 | `deleteElement(elementId)` | string | 无 |
 | `moveElement(payload)` | `{ elementId, x, y }` | 无 |

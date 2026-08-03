@@ -33,6 +33,13 @@ node index.js
 |------|------|
 | `editor_status` | 连接状态 / 桥接就绪检测 |
 | `editor_connect` | 连接编辑器页面（同源 RPC）：`pageUrl` 课件完整 URL 或 `httpUrl` origin，二选一；返回固定路由的 `instanceId` |
+| `editor_get_user_info` | 获取当前登录用户信息 |
+| `editor_search_books` / `editor_get_book` | 搜索书本并读取源书完整属性 |
+| `editor_create_book` | 以现有书本为基线创建新书；默认 light 仅继承属性，full 才复制目录和内容 |
+| `editor_jump_to_book` | 返回书本编辑器 URL，或在当前页/新标签执行跳转 |
+| `editor_search_templates` / `editor_get_template` / `editor_apply_template` | 搜索、查看并应用样章/区块模板 |
+| `editor_search_components` / `editor_apply_component` | 搜索系统/个人组件并应用到区块 |
+| `editor_search_images` / `editor_apply_image` | 搜索本书/总图片素材库并新增或替换图片 |
 | `editor_get_state` / `editor_list_slides` / `editor_get_slide` / `editor_select_slide` | 课件与页面查询 |
 | `editor_add_block` / `editor_update_block` / `editor_delete_block` | 区块增改删 |
 | `editor_add_element` / `editor_update_element` / `editor_delete_element` / `editor_order_element` | 元素增改删与层级 |

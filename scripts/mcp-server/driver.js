@@ -150,7 +150,131 @@ function mockResult(method, args = []) {
   const arg = (args && args[0]) || {}
   switch (method) {
     case 'ping':
-      return { version: '0.1.0-mock', editorType: 'content-editor', bookId: 'mock-book', mode: 'ai-control' }
+      return { version: '1.0.0-mock', editorType: 'content-editor', bookId: 'mock-book', mode: 'ai-control' }
+    case 'getUserInfo':
+      return { uid: 'mock-user', name: '示例用户', nickname: '示例用户' }
+    case 'searchBooks':
+      return {
+        items: [
+          {
+            id: 'mock-book-source',
+            name: '示例超媒教辅',
+            type: 6,
+            smart_book_type: 3,
+            smart_book_type_name: '超媒交互型',
+            cover_img_id: 'mock-cover-1',
+            cover_img_url: 'https://mock.example.com/book-cover.png'
+          }
+        ],
+        pageNo: arg.pageNo || 0,
+        pageSize: arg.pageSize || 20,
+        total: 1,
+        paginator: { total_count: 1 }
+      }
+    case 'getBookInfo':
+      return {
+        book_info: {
+          id: arg.bookId || 'mock-book-source',
+          name: '示例超媒教辅',
+          type: 6,
+          smart_book_type: 3,
+          smart_book_type_name: '超媒交互型',
+          cover_img_id: 'mock-cover-1',
+          cover_img_url: 'https://mock.example.com/book-cover.png'
+        },
+        subject_list: [{ id: 3, name: '语文' }],
+        book_mapping_list: [],
+        category_list: [],
+        edition_id: 1
+      }
+    case 'createBookFromSource': {
+      const bookId = 'mock-book-' + Date.now()
+      const copyMode = arg.copyMode || 'light'
+      return {
+        sourceBookId: arg.sourceBookId,
+        bookId,
+        copyMode,
+        includesCatalogAndContent: copyMode === 'full',
+        cloneMethod: copyMode === 'full' ? 'deepcopyhypermediabook' : 'addbook',
+        book: {
+          book_info: {
+            id: bookId,
+            name: arg.name || '示例超媒教辅_copy',
+            smart_book_type: arg.smartBookType || 3
+          }
+        },
+        editorUrl: `https://mock.example.com/content-editor?book_id=${bookId}&ai_control=1`
+      }
+    }
+    case 'jumpToBook':
+      return {
+        bookId: arg.bookId,
+        url: `https://mock.example.com/content-editor?book_id=${arg.bookId}&ai_control=1`,
+        target: arg.target || 'url',
+        scheduled: arg.target === 'current',
+        opened: arg.target === 'new'
+      }
+    case 'searchTemplates':
+      return [
+        {
+          id: arg.kind === 'block' ? 'block-template-1' : 'chapter-template-1',
+          name: arg.kind === 'block' ? '示例区块模板' : '示例样章模板',
+          type: arg.kind === 'block' ? 2 : 3,
+          kind: arg.kind === 'block' ? 'block' : 'chapter',
+          parentId: null,
+          classifyId: null,
+          cover: 'https://mock.example.com/template.png',
+          updatedAt: null
+        }
+      ]
+    case 'getTemplateDetail':
+      return {
+        id: arg.templateId,
+        name: '示例模板',
+        type: 3,
+        content: {},
+        childList: [],
+        lines: []
+      }
+    case 'applyTemplate':
+      return arg.kind === 'block'
+        ? { templateId: arg.templateId, blockId: 'mock-block-' + Date.now() }
+        : { slideId: 'mock-slide-' + Date.now() }
+    case 'searchComponents':
+      return [
+        {
+          id: 'component-1',
+          name: '示例排版组件',
+          scope: 'system',
+          classifyIds: ['classify-1'],
+          classifyType: 1,
+          cover: 'https://mock.example.com/component.png',
+          version: 1,
+          hasContent: true
+        }
+      ]
+    case 'applyComponent':
+      return { componentId: arg.componentId, elementIds: ['mock-component-el-' + Date.now()] }
+    case 'searchImageLibrary':
+      return [
+        {
+          id: 'image-1',
+          name: '示例图片素材',
+          url: 'https://mock.example.com/library/image-1.png',
+          format: 'png',
+          width: 640,
+          height: 480,
+          groupId: 'group-1',
+          groupName: '示例分组',
+          scope: arg.scope || 'book'
+        }
+      ]
+    case 'applyLibraryImage':
+      return {
+        imageId: arg.imageId || null,
+        url: arg.url || 'https://mock.example.com/library/image-1.png',
+        elementId: arg.elementId || 'mock-image-el-' + Date.now()
+      }
     case 'getState':
       return {
         bookInfo: { id: 'mock-book', name: '示例课件（MOCK）' },

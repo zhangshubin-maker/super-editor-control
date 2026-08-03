@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Books"
+  short_description: "默认轻量继承书本属性，按需完整复制目录内容并跳转编辑器"
+  default_prompt: "使用 $super-editor-books 搜索并核对源书，默认轻量创建新书，只有明确需要时才完整复制目录和内容。"

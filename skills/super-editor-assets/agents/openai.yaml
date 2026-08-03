@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Assets"
+  short_description: "Search and apply editor templates and libraries"
+  default_prompt: "Search this book's templates, components, and image library, then use suitable assets to design the new directory."

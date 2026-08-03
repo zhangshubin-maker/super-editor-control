@@ -4,7 +4,7 @@
 import { createInterface } from 'node:readline'
 import * as driver from './driver.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.3.0' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.5.1' }
 
 const TOOLS = [
   {
@@ -20,6 +20,199 @@ const TOOLS = [
       properties: {
         httpUrl: { type: 'string', description: '编辑器 origin（如 http://localhost:8090）' },
         pageUrl: { type: 'string', description: '课件完整 URL（含 ai_control=1），优先于 httpUrl' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_user_info',
+    description: '获取当前登录用户信息。默认优先使用编辑器已加载的用户状态，缺失时自动请求账号接口；refresh=true 强制刷新。',
+    inputSchema: {
+      type: 'object',
+      properties: { refresh: { type: 'boolean', description: '是否强制重新请求用户信息' } },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_search_books',
+    description: '搜索当前用户可访问的书本，默认查询 AI 教辅（type=6）。支持名称、教辅交互类型、学科、年级、学期和分页筛选，返回可用于克隆创建或跳转的书本 id。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '书本名称关键词' },
+        bookType: { type: 'number', description: '书本类型，默认 6（AI 教辅）' },
+        smartBookType: { type: ['string', 'number'], description: '1/PDF交互型、2/软件交互型、3/超媒交互型、4/界面交互型' },
+        subjectId: { type: ['string', 'number'], description: '学科 id；默认 -1' },
+        gradeId: { type: ['string', 'number'], description: '年级 id；默认 -1' },
+        period: { type: ['string', 'number'], description: '学段 id；默认 -1' },
+        volume: { type: ['string', 'number'], description: '学期；默认 -1' },
+        ifHasPdf: { type: 'number', enum: [-1, 0, 1], description: '是否有 PDF' },
+        ifHasPath: { type: 'number', enum: [-1, 0, 1], description: '是否有学习路径' },
+        pageNo: { type: 'number', description: '页码，从 0 开始，默认 0' },
+        pageSize: { type: 'number', description: '每页数量，默认 20' },
+        filters: { type: 'object', description: '透传给 getbooklist 的其他高级筛选字段' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_book',
+    description: '读取一本书的完整属性、学科、关联教材、分类和版本信息；创建前用于核对源书。',
+    inputSchema: {
+      type: 'object',
+      properties: { bookId: { type: ['string', 'number'], description: '书本 id' } },
+      required: ['bookId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_create_book',
+    description: '基于现有源书创建新书。默认 copyMode=light，只继承书本外部属性，不复制目录和内容；仅在明确需要完整副本时使用 full。可覆盖名称、后台名称、教辅交互类型和封面。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourceBookId: { type: ['string', 'number'], description: '必填：作为克隆基线的源书 id' },
+        copyMode: { type: 'string', enum: ['light', 'full'], description: '复制模式：light 仅复制书本属性（默认）；full 同时复制目录和内容' },
+        name: { type: 'string', description: '新书名称；light 模式省略时默认为“源书名_copy”' },
+        backgroundName: { type: 'string', description: '新书后台名称；省略时继承复制结果' },
+        smartBookType: { type: ['string', 'number'], description: '1/PDF交互型、2/软件交互型、3/超媒交互型、4/界面交互型' },
+        coverImagePath: { type: 'string', description: '本地封面图片路径；工具会先上传，再写入封面文件 id/URL' },
+        coverImgId: { type: ['string', 'number'], description: '已有封面文件 id' },
+        coverImgUrl: { type: 'string', description: '已有封面 URL，通常与 coverImgId 一起传' },
+        coverType: { type: 'number', enum: [0, 1], description: '封面样式：0 竖版，1 横版' },
+        includeToken: { type: 'boolean', description: '返回的编辑器 URL 是否包含登录 token，默认 false' },
+        aiControl: { type: 'boolean', description: '返回 URL 是否带 ai_control=1，默认 true' }
+      },
+      required: ['sourceBookId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_jump_to_book',
+    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 在当前页跳转；new 尝试打开新标签页。跳转后应重新调用 editor_connect。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        bookId: { type: ['string', 'number'], description: '目标书本 id' },
+        target: { type: 'string', enum: ['url', 'current', 'new'], description: '默认 url' },
+        includeToken: { type: 'boolean', description: 'URL 是否包含登录 token，默认 false' },
+        aiControl: { type: 'boolean', description: '是否带 ai_control=1，默认 true' }
+      },
+      required: ['bookId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_search_templates',
+    description: '搜索本书当前可用模板。kind=chapter 搜索样章模板（可直接用于新增目录），kind=block 搜索区块模板（可插入当前页）。返回模板 id、名称、封面和分类信息。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['chapter', 'block'], description: '模板种类，默认 chapter' },
+        query: { type: 'string', description: '模板名称关键词' },
+        pageNo: { type: 'number', description: '页码，从 0 开始，默认 0' },
+        pageSize: { type: 'number', description: '每页数量，默认 50' },
+        classifyId: { type: ['string', 'number'], description: '模板分类 id' },
+        parentId: { type: ['string', 'number'], description: '父模板 id；搜索样章下属区块时使用' },
+        timeSort: { type: 'number', description: '时间排序，默认 2' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_template',
+    description: '读取样章/区块模板详情及模板内容，供应用前理解其结构与素材。parseContent 默认 true，会尽量把 content JSON 解析为对象。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        templateId: { type: ['string', 'number'], description: '模板 id' },
+        parseContent: { type: 'boolean', description: '是否解析 content JSON，默认 true' }
+      },
+      required: ['templateId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_apply_template',
+    description: '应用模板：kind=chapter 时按样章模板新增并选中目录（立即写库）；kind=block 时把区块模板插入当前页（随后应 editor_save）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['chapter', 'block'] },
+        templateId: { type: ['string', 'number'], description: '模板 id' },
+        name: { type: 'string', description: '新目录或新区块名称' },
+        parentId: { type: ['string', 'number'], description: '新增目录的父目录 id；0/省略为根目录' },
+        index: { type: 'number', description: '区块插入下标；省略时追加' },
+        afterBlockId: { type: 'string', description: '插到该区块之后；优先于 index' }
+      },
+      required: ['kind', 'templateId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_search_components',
+    description: '搜索组件库。scope=system/mine/all，classifyType=1 为排版组件、2 为数据组件。结果包含封面、版本与是否有可应用内容。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '组件名称关键词' },
+        scope: { type: 'string', enum: ['all', 'system', 'mine'], description: '组件范围，默认 all' },
+        classifyType: { type: 'number', enum: [1, 2], description: '1=排版组件，2=数据组件' },
+        classifyId: { type: ['string', 'number'], description: '组件分类 id' },
+        limit: { type: 'number', description: '最多返回数量，默认 50' },
+        includeContent: { type: 'boolean', description: '是否包含可能很大的组件 content，默认 false' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_apply_component',
+    description: '把组件库中的组件应用到指定区块，自动生成新元素 id、居中或放到指定坐标，并记录组件使用历史。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        componentId: { type: ['string', 'number'], description: '组件 id' },
+        blockId: { type: 'string', description: '目标区块 uuid' },
+        scope: { type: 'string', enum: ['all', 'system', 'mine'], description: '组件范围，默认 all' },
+        left: { type: 'number', description: '组件包围盒左上角 X；省略时在区块内居中' },
+        top: { type: 'number', description: '组件包围盒左上角 Y；省略时在区块内居中' }
+      },
+      required: ['componentId', 'blockId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_search_images',
+    description: '搜索图片/素材库。scope=book 仅本书素材，global 为总素材库，all 合并两者；返回素材 URL、格式、尺寸和分组，可直接用于设计。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '图片素材名称关键词' },
+        scope: { type: 'string', enum: ['book', 'global', 'all'], description: '图片库范围，默认 book' },
+        groupId: { type: ['string', 'number'], description: '素材分组 id' },
+        bookId: { type: ['string', 'number'], description: '书本 id，默认当前书本' },
+        limit: { type: 'number', description: '最多返回数量，默认 50' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_apply_image',
+    description: '使用图片库素材：传 blockId 可新增图片元素；传 elementId 可替换已有图片。imageId 来自 editor_search_images，也可直接传 url。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        imageId: { type: ['string', 'number'], description: '图片素材 id（与 url 二选一）' },
+        url: { type: 'string', description: '已有素材 URL（与 imageId 二选一）' },
+        scope: { type: 'string', enum: ['book', 'global', 'all'], description: '查找 imageId 的范围，默认 all' },
+        blockId: { type: 'string', description: '新增图片时的目标区块 uuid' },
+        elementId: { type: 'string', description: '替换已有图片时的元素 id' },
+        left: { type: 'number' },
+        top: { type: 'number' },
+        width: { type: 'number' },
+        height: { type: 'number' },
+        name: { type: 'string' },
+        fixedRatio: { type: 'boolean', description: '是否保持宽高比，默认 true' }
       },
       additionalProperties: false
     }
@@ -811,6 +1004,53 @@ async function callTool(name, args) {
     }
     case 'editor_connect':
       data = await driver.connect(args.httpUrl, args.pageUrl)
+      break
+    case 'editor_get_user_info':
+      data = await driver.bridgeCall('getUserInfo', [{ refresh: !!args.refresh }])
+      break
+    case 'editor_search_books':
+      data = await driver.bridgeCall('searchBooks', [args])
+      break
+    case 'editor_get_book':
+      data = await driver.bridgeCall('getBookInfo', [{ bookId: args.bookId }])
+      break
+    case 'editor_create_book': {
+      const createArgs = { ...args }
+      if (createArgs.coverImagePath) {
+        const uploaded = await driver.uploadImage({
+          imagePath: createArgs.coverImagePath,
+          fileName: createArgs.coverFileName
+        })
+        createArgs.coverImgId = uploaded.fileId
+        createArgs.coverImgUrl = uploaded.url
+        delete createArgs.coverImagePath
+      }
+      data = await driver.bridgeCall('createBookFromSource', [createArgs])
+      break
+    }
+    case 'editor_jump_to_book':
+      data = await driver.bridgeCall('jumpToBook', [args])
+      break
+    case 'editor_search_templates':
+      data = await driver.bridgeCall('searchTemplates', [args])
+      break
+    case 'editor_get_template':
+      data = await driver.bridgeCall('getTemplateDetail', [args])
+      break
+    case 'editor_apply_template':
+      data = await driver.bridgeCall('applyTemplate', [args])
+      break
+    case 'editor_search_components':
+      data = await driver.bridgeCall('searchComponents', [args])
+      break
+    case 'editor_apply_component':
+      data = await driver.bridgeCall('applyComponent', [args])
+      break
+    case 'editor_search_images':
+      data = await driver.bridgeCall('searchImageLibrary', [args])
+      break
+    case 'editor_apply_image':
+      data = await driver.bridgeCall('applyLibraryImage', [args])
       break
 
     case 'editor_get_state':

@@ -1,6 +1,6 @@
 ---
 name: super-editor-control
-description: 超媒内容编辑器（super-editor）总控技能。用户要求 Codex 控制超媒编辑器完成课页/课件的创建、编辑、修改、优化、审查询课内容时使用。负责建立与编辑器页面的连接（同源 RPC/浏览器探测）、编排整体工作流，并按子任务加载 super-editor-state / super-editor-blocks / super-editor-elements / super-editor-canvas 子技能，处理保存与安全。
+description: 超媒内容编辑器（super-editor）总控技能。用户要求 Codex 控制超媒编辑器完成课页/课件的创建、编辑、修改、优化、审查询课内容，搜索/克隆创建/跳转书本，或自主利用样章模板、区块模板、组件库和图片库设计新目录时使用。负责建立连接、编排工作流，并按子任务加载书本、状态、素材、区块、元素、画布和大纲子技能。
 ---
 # Super Editor Control（总控）
 
@@ -11,6 +11,8 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 | 子技能 | 场景 | 关键能力 |
 |--------|------|---------|
 | `super-editor-state` | 读取/理解现状：页面列表、区块树、元素树、元素类型、找重复、备份 | getState / getSlide / getBlock / listElements / getCanvasTree / searchElements / isDirty |
+| `super-editor-assets` | 获取用户信息；搜索、理解并应用本书样章/区块模板、组件库和图片素材；自主新增目录前的素材选型 | getUserInfo / searchTemplates / applyTemplate / searchComponents / applyComponent / searchImageLibrary / applyLibraryImage |
+| `super-editor-books` | 搜索和核对源书；继承源书属性与内容创建新书；覆盖名称、教辅类型和封面；生成或执行书本跳转 | searchBooks / getBookInfo / createBookFromSource / jumpToBook |
 | `super-editor-blocks` | 区块增删改查、复制、移动、重命名、调尺寸、批量插入/替换/跨页复制 | addBlock / updateBlock / deleteBlock / moveBlock / cloneBlock / insertBlocks / replaceBlock / copyBlockToSlide |
 | `super-editor-elements` | 元素增删改查、属性与样式、批量、对齐/分布、选中、打组/解组、层级、**表格（读网格/改单元格/行列增删/合并拆分）**、选项卡 | addElement / updateElements / alignElements / setElementSpacing / setTextStyle / getTableGrid / setTableCellContent / mergeTableCells / groupElements 等 |
 | `super-editor-canvas` | 页面切换/增删/排序/重命名/复制、滚动定位/缩放、截图、**快照回滚（checkpoint/rollback，替代撤销重做）**、保存、整页备份导入 | scrollToBlock / setZoom / fitCanvas / renameSlide / duplicateSlide / exportSlide / screenshot / checkpoint / rollback / save |
@@ -20,9 +22,9 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 
 ## 1. 架构
 
-- **桥接层**（super-editor 仓库内实现）：`src/modules/contentEditor/aiControl/`，页面挂载 `window.__superEditor`，所有写操作走 Vuex action（保留撤销/重做与操作日志）。已实现 126 个方法（v0.4 表格 8 个 + batch；v0.5 思维导图 9 个；v0.6 文本读取/内容/自适应/重测 4 个；v0.7 表格行高自适应 fitTableHeights）：查询（getBlock/getElement/listElements/getCanvasTree/getSlideStats/searchElements）、选中（selectElement(s)/getSelection）、视图（getViewport/setViewport/scrollCanvas/scrollToElement/scrollToBlock）、区块/元素/页面增删改查、快照回滚、保存截图。
+- **桥接层**（super-editor 仓库内实现）：`src/modules/contentEditor/aiControl/`，页面挂载 `window.__superEditor`。覆盖状态、用户与素材库查询，书本搜索/克隆创建/跳转，页面/区块/元素/大纲编辑，表格、思维导图、文本自适应、图片上传、快照回滚、保存与截图；v1.1 增加书本管理。
 - **同源 RPC 通道**（推荐）：页面默认轮询 `{origin}/ai-control/rpc`（dev server 已实现，生产由后端按 `assets/production-integration-spec.md` 提供），外部进程 POST `/ai-control/rpc/request` 长轮询等结果即可调用任意方法。无需 CDP、无需本地服务、无需认领标签。可用 `window.__SUPER_EDITOR_RPC_URL` 覆盖为独立本地服务（如 `http://127.0.0.1:8765`）。详见 `assets/bridge-api-spec.md` 6.5。
-- **插件 MCP**：`editor_*` 工具（50 个，v0.5 思维导图 4 个：editor_mind_*；v0.6 文本 4 个：editor_text_info / editor_text_set_content / editor_text_adaptive / editor_text_fit），统一走同源 RPC 通道，`editor_connect({ pageUrl })` 传课件 URL 即可，不依赖 CDP / 浏览器调试端口。
+- **插件 MCP**：`editor_*` 结构化工具统一走同源 RPC 通道；包含用户/素材、状态、页面、区块、元素、表格、思维导图、文本、大纲、图片上传、批量和通用调用。`editor_connect({ pageUrl })` 传课件 URL 即可，不依赖 CDP / 浏览器调试端口。
 - **浏览器控制**：`browser:control-in-app-browser` / `chrome:control-chrome` 提供页面读取与截图；注意其 evaluate 是**只读沙箱**，看不到 `window.__superEditor`，只用于探测 DOM 标记与截图。
 
 ## 1.5 批量执行（强烈推荐，减少等待）
@@ -81,8 +83,8 @@ await b.batch({ steps: [
 ## 3. 标准工作流
 
 1. **连接确认**：桥接 DOM 标记 + `ping()`（经 RPC 通道）。
-2. **侦察**：`getState()` → `getSlide(currentSlideId)` → 全量 JSON 备份到磁盘（`super-editor-state`）。
-3. **规划**：列出改动清单（增/删/改/移），先小步验证桥接能力，大改动先告知用户。
+2. **侦察**：书本搜索/创建/跳转先加载 `super-editor-books`；课件编辑用 `getState()` → `getSlide(currentSlideId)` → 全量 JSON 备份到磁盘（`super-editor-state`）。
+3. **规划**：列出改动清单（增/删/改/移）；新增目录或重做版式时先加载 `super-editor-assets`，盘点可复用模板、组件和图片，再确定从模板起步还是从空白页起步。
 4. **执行**：每步一类操作（`super-editor-blocks` / `super-editor-elements`），完成后用 `getBlock` / `listElements` 核对；渲染核对用 `scrollToBlock` / `scrollToElement` + 页面截图（`super-editor-canvas` 3.2）。
 5. **保存**：`save()` → 刷新页面（F5 / reload）→ `getSlide` 验证持久化（`super-editor-canvas` 4）。
 6. **收尾**：告知用户刷新浏览器页面查看；更新备份目录。
