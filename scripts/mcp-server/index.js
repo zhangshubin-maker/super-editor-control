@@ -1384,7 +1384,8 @@ rl.on('line', (line) => {
   } catch {
     return
   }
-  if (!req.id) return // 通知类消息（notifications/initialized 等）
+  // JSON-RPC 请求 ID 可以是 0；只有完全未提供 id 的消息才是通知。
+  if (!Object.prototype.hasOwnProperty.call(req, 'id')) return
   handleRequest(req).then(
     (result) => send({ jsonrpc: '2.0', id: req.id, result }),
     (err) => {

@@ -50,12 +50,10 @@ if (-not $node) {
 $nodeJson = $node.Replace('\', '/')
 $serverJson = $serverPath.Replace('\', '/')
 $mcp = @{
-  mcpServers = @{
-    'super-editor' = @{
-      type    = 'stdio'
-      command = $nodeJson
-      args    = @($serverJson)
-    }
+  'super-editor' = @{
+    type    = 'stdio'
+    command = $nodeJson
+    args    = @($serverJson)
   }
 }
 $json = $mcp | ConvertTo-Json -Depth 4

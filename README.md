@@ -24,7 +24,7 @@
 
 ## Node 运行时（免安装）
 
-MCP 服务端需要 Node >= 22。Codex 桌面应用自带 Node 运行时，`.mcp.json` 默认使用官方写法（`command: "node"` + `cwd: "."`），由 Codex 用捆绑运行时解析，使用者无需单独安装 Node。
+MCP 服务端需要 Node >= 22。Codex 桌面应用自带 Node 运行时，`.mcp.json` 默认使用官方的直接服务映射格式（顶层为 `super-editor`，不要包裹为 `mcpServers`），并配置 `command: "node"` + `cwd: "."`，由 Codex 用捆绑运行时解析，使用者无需单独安装 Node。
 
 若目标环境无法解析 `node`（未使用捆绑运行时），运行兜底脚本生成带绝对路径的配置：
 

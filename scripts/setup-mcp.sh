@@ -46,12 +46,10 @@ fi
 
 cat > "$MCP_PATH" <<EOF
 {
-  "mcpServers": {
-    "super-editor": {
-      "type": "stdio",
-      "command": "$NODE",
-      "args": ["$SERVER_PATH"]
-    }
+  "super-editor": {
+    "type": "stdio",
+    "command": "$NODE",
+    "args": ["$SERVER_PATH"]
   }
 }
 EOF

@@ -1,6 +1,6 @@
 {
   "name": "super-editor-control",
-  "version": "1.0.0+codex.20260803074317",
+  "version": "1.0.0+codex.20260803090542",
   "description": "Drive the Super Media Editor from Codex: search and clone books, jump between editors, inspect and edit courseware, and reuse templates, components and image assets.",
   "author": {
     "name": "Super Editor Team"
@@ -20,9 +20,8 @@
     ],
     "defaultPrompt": [
       "\u6253\u5f00\u8bfe\u4ef6 AI \u7f16\u8f91\u6a21\u5f0f",
-      "\u5e2e\u6211\u65b0\u5efa\u4e00\u9875\u8bfe\u4ef6\u5e76\u6392\u7248",
-      "\u641c\u7d22\u4e00\u672c\u4e66\u5e76\u514b\u9686\u521b\u5efa\u65b0\u4e66",
-      "\u4f18\u5316\u5f53\u524d\u8bfe\u4ef6\u7684\u5143\u7d20\u5e03\u5c40"
+      "\u5e2e\u6211\u65b0\u5efa\u6216\u4f18\u5316\u4e00\u9875\u8bfe\u4ef6\u5e76\u6392\u7248",
+      "\u641c\u7d22\u4e00\u672c\u4e66\u5e76\u514b\u9686\u521b\u5efa\u65b0\u4e66"
     ]
   }
 }
