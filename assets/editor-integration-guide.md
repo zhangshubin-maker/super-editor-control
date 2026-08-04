@@ -8,26 +8,29 @@
 
 - `src/modules/contentEditor/aiControl/bridge.js` — `window.__superEditor` 实现
 - `src/modules/contentEditor/aiControl/index.js` — `mountBridge` / `unmountBridge`
-- `src/modules/contentEditor/index.vue` — URL 带 `ai_control=1` 时自动挂载/卸载
+- `src/modules/contentEditor/index.vue` — 监听 store 中的 `aiControl` 状态并动态挂载/卸载
+- `src/modules/contentEditor/components/Header/index.vue` — 顶部“AI 控制”按钮
 
 以下步骤作为原理说明与后续扩展参考；若只需启用，按第 3 节联调即可。
 
 ## 1. 总体思路
 
-**复用现有编辑页，而不是新做一个画布。** `/content-editor` 页面本身已经满足“左元素树 / 中画布 / 右属性面板”三栏布局。只要在页面挂载时检测 `ai_control=1`，把桥接对象挂到 `window` 上，Codex 就能驱动整个编辑器，且所有修改走与人工操作完全相同的 Vuex action（操作日志、自动高度联动全部生效）；ai_control 下撤销/重做改用整页深拷贝快照（checkpoint/rollback），不再写操作栈。
+**复用现有编辑页，而不是新做一个画布。** `/content-editor` 页面本身已经满足“左元素树 / 中画布 / 右属性面板”三栏布局。用户点击顶部“AI 控制”后，把桥接对象挂到 `window` 上，Codex 就能驱动整个编辑器，且所有修改走与人工操作完全相同的 Vuex action（操作日志、自动高度联动全部生效）；AI 控制开启时撤销/重做改用整页深拷贝快照（checkpoint/rollback），不再写操作栈。
 
 ## 2. 实现步骤
 
-### 2.1 入口：检测 ai_control=1
+### 2.1 入口：监听顶部 AI 控制按钮
 
 文件：`src/modules/contentEditor/index.vue`
 
-在 `created()` 或 `mounted()` 中：
+在页面中监听根 store 的 `aiControl` 状态：
 
 ```js
-if (location.href.indexOf('ai_control=1') > -1) {
-  const bridge = (await import('@/modules/contentEditor/aiControl/bridge.js')).default
-  this.$store.commit('contentEditorSlides/setBridgeInstance', { bridge, vm: this })
+watch: {
+  aiControl(val) {
+    if (val) mountBridge(this.$store)
+    else unmountBridge()
+  }
 }
 ```
 
@@ -98,15 +101,15 @@ async function mutate(action, payload) {
 
 ### 2.5 安全门槛
 
-- 仅当 `ai_control=1` 时挂载；打包环境可用 `process.env.NODE_ENV === 'production'` 时额外拒绝（或走鉴权）。
+- 仅当用户点击顶部“AI 控制”按钮时挂载，关闭按钮时立即卸载。
 - 挂载前打印一条明显的 `console.info('[ai-control] bridge mounted')`，便于排查。
 
 ## 3. 联调步骤
 
 1. `npm run dev` 启动，浏览器登录（确保 `sessionStorage.business_id` 与 token 存在）。
-2. 打开 `/content-editor?book_id=<你的课件ID>&ai_control=1`。
+2. 在 Electron 中打开 `/content-editor?book_id=<你的课件ID>`，点击顶部“AI 控制”。
 3. Console 验证：`window.__superEditor && await window.__superEditor.ping()`。
-4. 用本插件 MCP（`editor_connect` / `editor_get_state`）或浏览器技能执行一次元素修改，确认画布实时变化。
+4. 用本插件 MCP（直接调用 `editor_get_state`，或先调用无参数 `editor_connect`）执行一次元素修改，确认画布实时变化。
 5. 任务开始/关键节点先 `checkpoint({ label })` 打快照；修改后 `editor_save`，刷新页面确认已持久化；若结果不符合预期 `rollback({ checkpointId })` 恢复，任务成功 `clearCheckpoints()`。
 
 ## 4. 注意事项

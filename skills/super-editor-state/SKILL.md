@@ -8,8 +8,8 @@ description: 超媒编辑器（super-editor-control 插件）状态读取技能�
 
 ## 1. 前置：确认桥接可用
 
-- 页面必须带 `ai_control=1` 打开，且已挂载桥接。挂载标记：`document.documentElement.getAttribute('data-super-editor-bridge') === '1'`。
-- 浏览器扩展/内置浏览器的 evaluate 是**只读沙箱**，读不到 `window.__superEditor`；一律通过同源 RPC 通道调用桥接方法（页面侧轮询执行，等效主世界调用），不要尝试在沙箱里直接执行桥接代码。
+- 页面必须在 Electron 中打开并通过顶部“AI 控制”按钮挂载桥接。挂载标记：`document.documentElement.getAttribute('data-super-editor-bridge') === '1'`。
+- 浏览器扩展/内置浏览器的 evaluate 是**只读沙箱**，读不到 `window.__superEditor`；一律通过 Electron MCP/RPC 调用桥接方法，不要尝试在沙箱里直接执行桥接代码。
 - 连接方式见主技能 `super-editor-control` 第 2 节。
 
 ## 2. 只读方法速查

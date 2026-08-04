@@ -4,7 +4,7 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 ---
 # Super Editor Control（总控）
 
-让 Codex 像控制 Figma 一样控制超媒编辑器：实时查看画布、操作元素与区块、调整属性、保存与回退。核心是页面内挂载的桥接对象 `window.__superEditor`（页面以 `ai_control=1` 打开时挂载）。
+让 Codex 像控制 Figma 一样控制超媒编辑器：实时查看画布、操作元素与区块、调整属性、保存与回退。核心是用户通过编辑器顶部“AI 控制”开关挂载的页面桥接对象 `window.__superEditor`。
 
 ## 0. 子技能地图（按子任务加载对应技能）
 
@@ -23,8 +23,9 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 ## 1. 架构
 
 - **桥接层**（super-editor 仓库内实现）：`src/modules/contentEditor/aiControl/`，页面挂载 `window.__superEditor`。覆盖状态、用户与素材库查询，书本搜索/克隆创建/跳转，页面/区块/元素/大纲编辑，表格、思维导图、文本自适应、图片上传、快照回滚、保存与截图；v1.1 增加书本管理。
-- **同源 RPC 通道**（推荐）：页面默认轮询 `{origin}/ai-control/rpc`（dev server 已实现，生产由后端按 `assets/production-integration-spec.md` 提供），外部进程 POST `/ai-control/rpc/request` 长轮询等结果即可调用任意方法。无需 CDP、无需本地服务、无需认领标签。可用 `window.__SUPER_EDITOR_RPC_URL` 覆盖为独立本地服务（如 `http://127.0.0.1:8765`）。详见 `assets/bridge-api-spec.md` 6.5。
-- **插件 MCP**：`editor_*` 结构化工具统一走同源 RPC 通道；包含用户/素材、状态、页面、区块、元素、表格、思维导图、文本、大纲、图片上传、批量和通用调用。`editor_connect({ pageUrl })` 传课件 URL 即可，不依赖 CDP / 浏览器调试端口。
+- **Electron RPC 通道**（正式推荐）：Electron 在 `127.0.0.1:8765` 提供 RPC，preload 将页面轮询地址覆盖到该服务。页面开启“AI 控制”后自动注册，无需正式站点部署 RPC 路由。
+- **Electron MCP**：Electron 同端口提供 `/mcp`，插件 `.mcp.json` 直接连接该地址。`editor_*` 工具首次调用时自动选择最近活跃页面；`editor_connect()` 只用于主动检查/重连，不需要 URL。
+- **开发 RPC 兜底**：普通浏览器开发仍可使用 `vue.config.js` 的同源 `/ai-control/rpc`；在 Electron 内打开开发地址时优先使用 Electron RPC。
 - **浏览器控制**：`browser:control-in-app-browser` / `chrome:control-chrome` 提供页面读取与截图；注意其 evaluate 是**只读沙箱**，看不到 `window.__superEditor`，只用于探测 DOM 标记与截图。
 
 ## 1.5 批量执行（强烈推荐，减少等待）
@@ -58,27 +59,13 @@ await b.batch({ steps: [
 - 返回 `{ results: [{ index, method, ok, value/error }], stopped, stoppedAt }`，逐条核对 `ok`。
 - MCP 工具：`editor_batch({ steps, stopOnError })`。
 
-## 2. 连接（按优先级）
+## 2. 连接
 
-### 方式 A：同源 RPC 通道（推荐，无需 CDP / 本地服务 / 标签认领）
-1. 确认页面 URL 带 `ai_control=1` 且 `document.documentElement.getAttribute('data-super-editor-bridge') === '1'`（只读探测即可）。
-2. 页面默认轮询 `{origin}/ai-control/rpc/poll?instance=<id>`（dev server 已内置该路由；生产由后端按 `assets/production-integration-spec.md` 提供）。
-3. 调用方（插件 MCP 或脚本）直接 `POST {origin}/ai-control/rpc/request`：`{ method, args, timeoutMs?, targetInstance? }`，服务端入队并在页面回传结果后响应（长轮询，最多 90s）：
-   ```json
-   { "ok": true, "value": { ... }, "error": "" }
-   ```
-4. 调用任何桥接方法都走这个通道（如 `ping()`、`getSlide`、`moveElement`、`save()`）。**所有画布操控一律通过桥接方法，禁止用鼠标/键盘模拟**。
-5. 多标签页/多窗口时，先 `ping()` 拿响应里的 `instance` 字段（或 `editor_status` 的 `instanceId`），后续请求固定带 `targetInstance`，避免路由到旧页面。
-5. 兜底：若目标环境没有 `/ai-control/rpc` 路由，可在页面加载前注入 `window.__SUPER_EDITOR_RPC_URL` 指向本地 8765 独立服务（协议同 §6.5）。
-
-### 方式 B：MCP 工具（首选入口）
-1. `editor_connect({ pageUrl: '<课件完整URL>' })` → 自动解析 origin 并连接同源 RPC 通道；
-2. `editor_status` 确认 `bridgeReady=true`；
-3. 用 `editor_*` 工具操作（与方式 A 同一条链路）。
-页面没开时：先用浏览器技能打开课件 URL（`ai_control=1`），再 `editor_connect`。
-
-### 方式 C：浏览器技能（只读）
-打开带 `ai_control=1` 的 URL；只读探测可用（DOM 标记、innerText、页面截图）；**一切写操作与画布滚动必须走方式 D / A / B 的桥接调用**。
+1. 确认善版优荣 Electron 正在运行，并在 Electron 中打开目标课件。
+2. 请用户点击编辑器顶部“AI 控制”开关；DOM 标记 `data-super-editor-bridge="1"` 表示页面桥接已挂载。
+3. 可调用 `editor_status` 检查，或直接调用任务所需的 `editor_*` 工具；首次调用会自动连接，不要求先执行 `editor_connect`。
+4. 多标签页/多窗口时默认固定到最近开启控制的页面；需要切换时先在目标页面关闭再开启按钮，然后调用 `editor_connect()` 重新选择。
+5. 所有画布写操作必须通过 MCP/桥接方法完成，禁止用鼠标键盘模拟。浏览器技能仅用于只读探测或辅助打开页面。
 
 ## 3. 标准工作流
 
@@ -93,18 +80,18 @@ await b.batch({ steps: [
 
 - 编辑前备份原始 JSON；删除前比对内容（同名 ≠ 重复）。
 - `addSlide`/`deleteSlide`/`moveSlide` 立即写库；`save()` 写当前页；涉及真实课件的大改动先告知。
-- 桥接只在 `ai_control=1` 的开发/测试环境挂载；生产环境默认关闭。
+- 桥接只在用户开启顶部“AI 控制”按钮后挂载，关闭按钮或离开页面时卸载。
 - 写操作必须走桥接（Vuex action），不要直接改 store，否则破坏撤销/重做。
-- **自动保存已禁用**：`ai_control=1` 模式下编辑器自动保存（10s 定时）已禁用，AI 的改动只有显式调用 `save()` 才会写回后端；测试性改动结束后仍需删除/还原（避免留下脏数据），`getState().dirty` 可判断是否有未保存改动。
+- **自动保存已禁用**：AI 控制开启时编辑器自动保存（10s 定时）已禁用，AI 的改动只有显式调用 `save()` 才会写回后端；测试性改动结束后仍需删除/还原，`getState().dirty` 可判断是否有未保存改动。
 - **禁止用鼠标/键盘模拟画布操作**（拖拽、输入坐标等）；效率低且不准，一律用 `moveElement` / `resizeElement` / `scrollToBlock` 等桥接方法。
 
 ## 5. 故障排查速查
 
 | 现象 | 处理 |
 |------|------|
-| BRIDGE_MISSING | URL 是否带 `ai_control=1`；刷新页面；确认桥接层已实现（`assets/editor-integration-guide.md`） |
-| 读不到 `window.__superEditor` | 沙箱隔离正常现象 → 用 DOM 标记探测，调用一律走同源 RPC 通道（方式 A / B） |
-| RPC 调用超时 | 检查 `GET {origin}/ai-control/rpc/instances` 是否有注册实例（无则页面未开/未带 ai_control=1）；`ping()` 先行验证；同源路由缺失时注入 `window.__SUPER_EDITOR_RPC_URL` 走本地 8765 |
+| BRIDGE_MISSING | 确认课件在 Electron 中打开且顶部“AI 控制”已开启；必要时关闭后重新开启 |
+| MCP 无法连接 | 确认善版优荣 Electron 已启动且本机 `http://127.0.0.1:8765/mcp` 可访问；更新后新开 Codex 任务 |
+| RPC 调用超时 | 调用 `editor_status` 检查实例；确认目标页面没有关闭/刷新，必要时重新开启顶部按钮并 `editor_connect()` |
 | `getSlide` 报 int 反序列化错误 | id 参数传了对象 → 改传标量 |
 | 截图缺内容 | 画布虚拟滚动 → 先用 `scrollToBlock` / `scrollToElement` 滚动到位再截图 |
 | 保存后看不到 | 刷新页面后重新 `getSlide`；确认 `save()` 返回成功 |

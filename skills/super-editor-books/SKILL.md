@@ -9,7 +9,7 @@ description: 超媒编辑器（super-editor-control 插件）的书本管理技�
 
 ## 搜索与选择源书
 
-1. 连接任意已登录且带 `ai_control=1` 的超媒编辑器页面。
+1. 在 Electron 中打开任意已登录的超媒编辑器页面，并开启顶部“AI 控制”。
 2. 调用 `editor_search_books({ query, smartBookType?, pageNo?, pageSize? })`。
 3. 名称相近时，调用 `editor_get_book({ bookId })` 核对学科、年级、版本、关联教材、
    `smart_book_type` 和封面，不能仅凭名称猜源书。

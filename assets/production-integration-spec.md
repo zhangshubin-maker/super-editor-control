@@ -1,12 +1,12 @@
-# Super Editor AI 控制通道：同源 RPC 集成规范（后端 / 网关）
+# Super Editor AI 控制通道：旧版同源 RPC 兼容规范
 
-> 本文档定义「Codex 插件 ↔ 编辑器页面」的生产级控制通道协议，供后端/网关团队在正式环境按此实现。
-> 目标：用户把课件链接交给 Codex 后，插件无需 CDP、无需本地服务、无需控制浏览器，直接通过本通道读写画布。
+> 当前正式推荐方案已改为 Electron 内置 MCP + RPC，正式环境后端不需要实现本文路由。
+> 本文仅保留给普通浏览器开发和无法使用 Electron 的旧版兼容场景。
 
 ## 1. 总体架构
 
 ```
-Codex 插件 MCP（node 进程）                    编辑器页面（浏览器，ai_control=1）
+旧版独立 MCP/脚本                              编辑器页面（顶部开启 AI 控制）
         │  POST /ai-control/rpc/request              │  GET /ai-control/rpc/poll?instance=xxx（每 400ms）
         │  （长轮询，最多 90s 等结果）                 │  （队列有命令 → 执行 window.__superEditor 方法）
         ▼                                            ▼
@@ -18,7 +18,7 @@ Codex 插件 MCP（node 进程）                    编辑器页面（浏览器
 
 - 服务端只需维护：`按 instance 的命令队列` + `按 requestId 的结果暂存`，无状态、可水平扩展。
 - 页面只轮询自己的同源地址，无跨域、无额外端口、无独立服务进程。
-- 插件通过页面 URL 自动解析 `origin`，因此插件侧输入只有一个参数：**课件链接**。
+- 旧版脚本通过页面 URL 解析 `origin`；当前 Codex 插件不再使用这条链路。
 
 ## 2. 路由规范
 
@@ -71,7 +71,7 @@ Codex 插件 MCP（node 进程）                    编辑器页面（浏览器
 - 实例生命周期：以 poll 心跳为准，建议服务端清理 30s 以上无 poll 的实例；`targetInstance` 指定的实例已失活时应立即返回错误（不要挂起等超时）。
 
 - `timeoutMs` 缺省 60000，上限 120000；超时返回 `{"ok":false,"error":"RPC 超时（...ms）：<method>"}`。
-- 无注册实例时立即返回 `{"ok":false,"error":"暂无已注册的编辑器页面，请先打开带 ai_control=1 的课件页"}`。
+- 无注册实例时立即返回 `{"ok":false,"error":"暂无已注册的编辑器页面，请先开启顶部 AI 控制"}`。
 - `id` 可选，缺省服务端生成；结果以该 id 关联。
 
 ### 2.4 GET `/ai-control/rpc/instances`
@@ -107,11 +107,11 @@ Codex 插件 MCP（node 进程）                    编辑器页面（浏览器
 
 - **最低成本**：后端主服务里加一个 controller（约 100 行），内存队列即可（单机、有状态可接受，命令在途时间 < 2s）。
 - **网关透传**：若主服务不便改动，可做独立轻服务（同域名下 `/ai-control/*` 反代到它），复用统一鉴权。
-- **页面侧开关**：页面只有在 `ai_control=1` 且用户/租户允许时启动轮询（权限位建议后端下发，见 §6）。
+- **页面侧开关**：页面只有在用户点击顶部“AI 控制”且用户/租户允许时启动轮询。
 
 ## 6. 安全（后续 P2 落地，先记录）
 
-- `ai_control` 应改为后端权限位，不能只看 URL 参数。
+- 顶部“AI 控制”按钮的可见性/可用性后续应接入后端权限位。
 - `/ai-control/rpc/*` 需与课件接口同一鉴权体系（token/会话），并做频率限制（如每实例 10 req/s）。
 - 建议页面轮询地址由后端动态下发（`/ai-control/config`），避免前端硬编码。
 
@@ -119,4 +119,4 @@ Codex 插件 MCP（node 进程）                    编辑器页面（浏览器
 
 - 仓库 `vue.config.js` 的 `devServer.before` 已实现上述全部端点（内存版，约 80 行），可直接对照。
 - 页面侧实现：`src/modules/contentEditor/aiControl/index.js`（`startRpcPolling`）。
-- 插件侧调用：`scripts/mcp-server/driver.js` 的 `connect(pageUrl, { mode: 'rpc' })` + `bridgeCall(method, args)`。
+- 旧版脚本侧调用：`scripts/mcp-server/driver.js` 的 `connect(httpUrl, pageUrl)` + `bridgeCall(method, args)`；正式插件不再引用。

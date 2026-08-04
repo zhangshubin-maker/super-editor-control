@@ -11,34 +11,33 @@
 - 图片上传与使用（v0.9）：`editor_upload_image` / `editor_add_image_element` / `editor_set_image_src`，把本地生成图片上传到课件媒体库并放入画布（配合模型生图能力）。
 - 模板与素材复用（v1.0）：获取用户信息，搜索并应用样章模板、区块模板、组件库与图片素材，让 AI 先盘点本书资源再自主设计新目录。
 - 书本管理（v1.2）：搜索当前用户可访问书本；默认轻量继承源书外部属性创建空内容新书，明确需要时才完整复制目录和内容；支持覆盖名称、教辅类型、封面及编辑器跳转。
-- `.mcp.json` + `scripts/mcp-server/` — 零依赖 Node MCP 服务端，通过同源 RPC 通道连接编辑器页面，把 `window.__superEditor` 包装成结构化工具（`editor_*`）。
+- `.mcp.json` — 直接连接 Electron 内置的 `http://127.0.0.1:8765/mcp`，无需插件自行启动 Node 进程。
+- Electron MCP 适配层 — 自动发现 Electron 中已开启“AI 控制”的编辑器页面，并把 `window.__superEditor` 包装成结构化工具（`editor_*`）。
 - `assets/bridge-api-spec.md` — `window.__superEditor` 桥接 API 契约（编辑器侧需要实现的接口）。
 - `assets/editor-integration-guide.md` — 在 super-editor 仓库内实现桥接层的逐步指南。
 
 ## 前置条件
 
-- Node.js >= 22（MCP 服务端依赖原生 WebSocket）。
-- super-editor 已在本机运行，且已按 `assets/editor-integration-guide.md` 实现桥接层（`ai_control=1` 时挂载 `window.__superEditor`）。
-- 编辑器页面已带 `ai_control=1` 打开（dev server 内置同源 RPC 路由；生产按 `assets/production-integration-spec.md` 提供）。
+- 已安装并运行包含 AI Control MCP 的善版优荣 Electron 桌面端。
+- Electron 中已打开 super-editor 课件页面，并点击编辑器顶部“AI 控制”开关。
+- 已安装 Codex 桌面端和本插件；插件本身不再要求用户安装 Node.js。
 
 
-## Node 运行时（免安装）
+## 自动连接
 
-MCP 服务端需要 Node >= 22。Codex 桌面应用自带 Node 运行时，`.mcp.json` 默认使用官方的直接服务映射格式（顶层为 `super-editor`，不要包裹为 `mcpServers`），并配置 `command: "node"` + `cwd: "."`，由 Codex 用捆绑运行时解析，使用者无需单独安装 Node。
+插件固定连接 Electron 本机 MCP 地址 `http://127.0.0.1:8765/mcp`。用户只需先启动 Electron、打开课件并开启顶部“AI 控制”；Codex 调用任意 `editor_*` 工具时会自动选择最近活跃的页面。`editor_connect` 仅用于主动检查/重新选择，不再接收 `pageUrl` 或 `httpUrl`。
 
-若目标环境无法解析 `node`（未使用捆绑运行时），运行兜底脚本生成带绝对路径的配置：
-
-- Windows：`powershell -ExecutionPolicy Bypass -File scripts/setup-mcp.ps1`
-- macOS / Linux：`bash scripts/setup-mcp.sh`
-
-脚本会按顺序探测：环境变量 `SUPER_EDITOR_NODE` > Codex 捆绑的 Node > 系统 PATH 中的 Node，校验主版本 >= 22 后生成 `.mcp.json`（原文件自动备份为 `.mcp.json.bak`）。生成后需重启 Codex 生效。
+开发环境也兼容：只要开发页面在 Electron 内打开，preload 会将页面 RPC 指向 Electron；`vue.config.js` 的 dev RPC 可以继续作为普通浏览器开发的兜底。
 ## 安装
 
 **本机个人使用**（personal marketplace 已生成）：
 
 1. `codex plugin add super-editor-control@personal`
-2. 新开一个 Codex 会话（技能与 MCP 工具在新会话中生效）。
-3. 让 Codex 打开课件链接（带 `ai_control=1`），或直接让它使用 `editor_connect({ pageUrl })`。
+2. 启动善版优荣 Electron，再新开一个 Codex 会话（技能与 MCP 工具在新会话中生效）。
+3. 在 Electron 中打开课件并点击顶部“AI 控制”。
+4. 直接让 Codex 制作或修改课件；工具会自动连接，无需提供课件 URL。
+
+若 Codex 会话打开时 Electron 尚未运行，该会话可能没有加载 MCP 工具；启动 Electron 后新开一个 Codex 会话即可。
 
 **Git 市场发布版**（本仓库即插件市场，`.agents/plugins/marketplace.json`）：
 
@@ -51,7 +50,7 @@ MCP 服务端需要 Node >= 22。Codex 桌面应用自带 Node 运行时，`.mcp
 
 ## 开发
 
-- 修改 MCP 服务端后重装插件：
+- 修改插件配置或技能后重装插件：
   `python C:/Users/shubin/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py C:/Users/shubin/plugins/super-editor-control`
   然后 `codex plugin add super-editor-control@personal`。
-- 无浏览器时可用 MOCK 模式测试 MCP 服务端：`SUPER_EDITOR_MOCK=1 node scripts/mcp-server/index.js`。
+- `scripts/mcp-server/` 保留为旧版独立 stdio 调试实现，正式插件不再引用；正式链路在 Electron 项目中测试。
