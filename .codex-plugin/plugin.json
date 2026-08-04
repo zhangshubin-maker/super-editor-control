@@ -1,6 +1,6 @@
 {
   "name": "super-editor-control",
-  "version": "1.0.0+codex.20260804045624",
+  "version": "1.0.0+codex.20260804084643",
   "description": "Control Super Editor in regular browsers with a built-in MCP adapter and localhost RPC broker.",
   "author": {
     "name": "Super Editor Team"

@@ -7,7 +7,9 @@
 ## 运行要求
 
 - 直接开发运行需要 Node.js 20+。
-- 正式插件通过 `start.ps1` 优先使用 Codex 自带 Node，用户无需单独安装。
+- Windows Marketplace 安装通过 `start.ps1` 优先使用 Codex 自带 Node，用户无需单独安装。
+- macOS 先在仓库根目录运行 `bash scripts/setup-mcp.sh`，生成指向 Codex 自带或系统 Node 20+
+  的本机 `.mcp.json`，再从该本地仓库安装 Marketplace。
 - 浏览器打开课件后，由用户点击顶部“AI 控制”按钮注册页面。
 
 ## 自动连接
@@ -25,7 +27,7 @@
 |------|------|
 | `SUPER_EDITOR_MOCK` | `1` 时进入 mock 模式，不连接编辑器 |
 | `SUPER_EDITOR_RPC_PORT` | 本机 broker 端口，默认 `8765` |
-| `SUPER_EDITOR_NODE` | `start.ps1` 优先使用的 Node 可执行文件 |
+| `SUPER_EDITOR_NODE` | Windows/macOS 安装脚本优先使用的 Node 可执行文件 |
 
 ## 启动与测试
 

@@ -52,11 +52,15 @@ if (-not $node) {
 # 3. 生成 .mcp.json（绝对路径、正斜杠，兼容 Windows/macOS/Linux）
 $nodeJson = $node.Replace('\', '/')
 $serverJson = $serverPath.Replace('\', '/')
+$pluginRootJson = $pluginRoot.Replace('\', '/')
 $mcp = @{
   'super-editor' = @{
-    type    = 'stdio'
-    command = $nodeJson
-    args    = @($serverJson)
+    type                = 'stdio'
+    command             = $nodeJson
+    args                = @($serverJson)
+    cwd                 = $pluginRootJson
+    startup_timeout_sec = 15
+    tool_timeout_sec    = 120
   }
 }
 $json = $mcp | ConvertTo-Json -Depth 4

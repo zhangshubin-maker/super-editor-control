@@ -19,7 +19,11 @@ fi
 CANDIDATES=()
 [ -n "${SUPER_EDITOR_NODE:-}" ] && CANDIDATES+=("$SUPER_EDITOR_NODE")
 CANDIDATES+=("$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node")
-CANDIDATES+=("$HOME/Library/Application Support/Codex/bin/node") # macOS 常见位置
+CANDIDATES+=("/Applications/Codex.app/Contents/Resources/cua_node/bin/node")
+CANDIDATES+=("$HOME/Applications/Codex.app/Contents/Resources/cua_node/bin/node")
+CANDIDATES+=("/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node")
+CANDIDATES+=("$HOME/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node")
+CANDIDATES+=("$HOME/Library/Application Support/Codex/bin/node") # 旧版 macOS 位置
 CANDIDATES+=("$HOME/.local/share/Codex/bin/node")                # Linux 常见位置
 CANDIDATES+=("$HOME/.local/opt/Codex/bin/node")                  # Linux 备选位置
 if command -v node >/dev/null 2>&1; then
@@ -45,15 +49,29 @@ fi
 
 [ -f "$MCP_PATH" ] && cp "$MCP_PATH" "$MCP_PATH.bak" && echo "[提示] 已备份旧配置到 $MCP_PATH.bak"
 
-cat > "$MCP_PATH" <<EOF
-{
-  "super-editor": {
-    "type": "stdio",
-    "command": "$NODE",
-    "args": ["$SERVER_PATH"]
+SUPER_EDITOR_CONFIG_PATH="$MCP_PATH" \
+SUPER_EDITOR_SERVER_PATH="$SERVER_PATH" \
+SUPER_EDITOR_PLUGIN_ROOT="$PLUGIN_ROOT" \
+  "$NODE" <<'NODE'
+const fs = require('node:fs')
+
+const config = {
+  'super-editor': {
+    type: 'stdio',
+    command: process.execPath,
+    args: [process.env.SUPER_EDITOR_SERVER_PATH],
+    cwd: process.env.SUPER_EDITOR_PLUGIN_ROOT,
+    startup_timeout_sec: 15,
+    tool_timeout_sec: 120
   }
 }
-EOF
+
+fs.writeFileSync(
+  process.env.SUPER_EDITOR_CONFIG_PATH,
+  `${JSON.stringify(config, null, 2)}\n`,
+  'utf8'
+)
+NODE
 
 echo "[完成] 已生成 $MCP_PATH"
 echo "  command: $NODE"

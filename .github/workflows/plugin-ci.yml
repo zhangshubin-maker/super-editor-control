@@ -1,0 +1,60 @@
+name: Plugin CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  mcp-tests:
+    name: MCP tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate JSON manifests
+        shell: bash
+        run: >-
+          node -e "const fs=require('fs');
+          for(const file of ['.agents/plugins/marketplace.json','.codex-plugin/plugin.json','.mcp.json','scripts/mcp-server/package.json'])
+          JSON.parse(fs.readFileSync(file,'utf8'))"
+
+      - name: Run MCP and RPC tests
+        working-directory: scripts/mcp-server
+        run: npm test
+
+      - name: Validate macOS setup script
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          bash -n scripts/setup-mcp.sh
+          SUPER_EDITOR_NODE="$(command -v node)" bash scripts/setup-mcp.sh
+
+      - name: Smoke-test configured MCP launcher
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { spawnSync } = require('node:child_process')
+          const config = require('./.mcp.json')['super-editor']
+          const result = spawnSync(config.command, config.args || [], {
+            cwd: config.cwd || process.cwd(),
+            env: { ...process.env, SUPER_EDITOR_MOCK: '1' },
+            input: '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n',
+            encoding: 'utf8',
+            timeout: 20000
+          })
+
+          if (result.error || result.status !== 0 || !result.stdout.includes('"id":1')) {
+            console.error(result.error || result.stderr || result.stdout)
+            process.exit(1)
+          }
+          NODE

@@ -28,8 +28,10 @@ Codex ──stdio──> 插件 MCP 进程 ──本机 RPC──> 普通浏览�
 - 正式网页包含 `src/modules/contentEditor/aiControl/` 的浏览器 RPC 客户端，并通过 HTTPS 发布。
 - 使用支持本地网络访问授权的新版 Chrome / Edge。首次开启时若浏览器询问本地网络权限，选择“允许”。
 
-用户不需要安装 Electron，也不需要另装 Node.js。插件启动器优先使用 Codex 自带的 Node 运行时，
-仅在找不到时才回退到系统 Node.js 20+。
+Windows 用户不需要安装 Electron，也不需要另装 Node.js。插件启动器优先使用 Codex 自带的
+Node 运行时，仅在找不到时才回退到系统 Node.js 20+。macOS 用户见下方“安装”章节：由于
+Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从本仓库克隆安装并先运行一次
+`scripts/setup-mcp.sh`。
 
 若正式站点设置 CSP，`connect-src` 必须包含 `http://127.0.0.1:8765`。页面位于跨域 iframe 时，
 宿主页还需要向该 iframe 委派 `loopback-network` 权限。
@@ -45,25 +47,64 @@ Codex ──stdio──> 插件 MCP 进程 ──本机 RPC──> 普通浏览�
 
 ## 安装
 
-本机 personal marketplace：
+### Windows：Git Marketplace（推荐）
+
+```powershell
+codex plugin marketplace add zhangshubin-maker/super-editor-control
+codex plugin add super-editor-control@super-editor-control
+```
+
+安装完成后重启 Codex，并新建任务使用插件。
+
+### macOS：本地 Marketplace
+
+插件的 MCP/RPC 主体是纯 Node.js，可在 macOS 运行；但仓库默认 `.mcp.json` 使用 Windows
+启动器。Mac 用户需要克隆仓库，让安装脚本探测 Codex 自带或系统 Node.js 20+，并生成本机
+绝对路径配置：
+
+```bash
+git clone https://github.com/zhangshubin-maker/super-editor-control.git
+cd super-editor-control
+bash scripts/setup-mcp.sh
+codex plugin marketplace add .
+codex plugin add super-editor-control@super-editor-control
+```
+
+完成后重启 Codex，并新建任务。若脚本找不到 Codex 自带运行时，请安装 Node.js 20+，或通过
+`SUPER_EDITOR_NODE=/absolute/path/to/node bash scripts/setup-mcp.sh` 指定 Node 路径。
+
+### 本机开发安装
+
+开发机已配置 personal marketplace 时：
 
 ```powershell
 codex plugin add super-editor-control@personal
 ```
 
-Git marketplace 发布版：
+### 更新
+
+Windows Git Marketplace 安装：
 
 ```powershell
-codex plugin marketplace add <owner>/super-editor-control
+codex plugin marketplace upgrade super-editor-control
 codex plugin add super-editor-control@super-editor-control
 ```
 
-插件更新后使用 `codex plugin update` 或重新安装，并新开任务加载新 MCP 配置。
+macOS 本地 Marketplace 安装：
+
+```bash
+git pull
+bash scripts/setup-mcp.sh
+codex plugin add super-editor-control@super-editor-control
+```
+
+更新后都需要重启 Codex 并新建任务，才能加载新的技能和 MCP 工具。
 
 ## 组成
 
 - `.mcp.json`：启动插件自带的 stdio MCP。
-- `scripts/mcp-server/start.ps1`：自动定位 Codex 捆绑或系统 Node 运行时。
+- `scripts/mcp-server/start.ps1`：Windows 自动定位 Codex 捆绑或系统 Node 运行时。
+- `scripts/setup-mcp.sh`：macOS/Linux 探测 Node 并生成本机 MCP 配置。
 - `scripts/mcp-server/index.js`：MCP 工具适配器。
 - `scripts/mcp-server/rpc-broker.js`：本机 RPC 中继、选主接管、页面租约和故障语义。
 - `skills/`：总控及书本、素材、状态、区块、元素、画布、大纲子技能。
@@ -85,5 +126,5 @@ queued/in-flight 故障语义、串行工具、两个 MCP 进程选主、owner �
 `SUPER_EDITOR_MOCK=1`。默认端口可用 `SUPER_EDITOR_RPC_PORT` 覆盖，但网页端必须通过
 `window.__SUPER_EDITOR_RPC_URL` 指向同一端口。
 
-修改插件后按开发流程更新 cachebuster、校验并重新安装。`scripts/setup-mcp.ps1` 仅作为旧版手动
-配置/诊断兜底，正常安装不需要执行。
+修改插件后按开发流程更新 cachebuster、校验并重新安装。`scripts/setup-mcp.ps1` 仅作为
+Windows 旧版手动配置/诊断兜底；`scripts/setup-mcp.sh` 是 macOS 当前的安装步骤。
