@@ -8,8 +8,8 @@ description: 超媒编辑器（super-editor-control 插件）状态读取技能�
 
 ## 1. 前置：确认桥接可用
 
-- 页面必须在 Electron 中打开并通过顶部“AI 控制”按钮挂载桥接。挂载标记：`document.documentElement.getAttribute('data-super-editor-bridge') === '1'`。
-- 浏览器扩展/内置浏览器的 evaluate 是**只读沙箱**，读不到 `window.__superEditor`；一律通过 Electron MCP/RPC 调用桥接方法，不要尝试在沙箱里直接执行桥接代码。
+- 页面可在普通 Chrome / Edge 中打开，并通过顶部“AI 控制”按钮挂载桥接。挂载标记：`document.documentElement.getAttribute('data-super-editor-bridge') === '1'`。
+- 浏览器扩展/内置浏览器的 evaluate 是**只读沙箱**，读不到 `window.__superEditor`；一律通过插件 MCP + 本机 RPC 调用桥接方法，不要尝试在沙箱里直接执行桥接代码。
 - 连接方式见主技能 `super-editor-control` 第 2 节。
 
 ## 2. 只读方法速查
@@ -61,7 +61,7 @@ text、image、shape、line、table、video、audio、mind（思维导图）、l
 
 ### 5.1 读取整页（编辑前必做）
 ```js
-// 同源 RPC 调用模板（MCP 工具 editor_get_state / editor_get_slide，或 editor_rpc_call({ method: 'getState' })）
+// 桥接调用模板（实际任务用 MCP 工具 editor_get_state / editor_get_slide，或 editor_rpc_call）
 (async () => {
   const b = window.__superEditor
   const state = await b.getState()

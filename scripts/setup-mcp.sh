@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # setup-mcp.sh
 # 生成 .mcp.json 兜底脚本：探测可用的 Node 运行时（优先 Codex 捆绑的 node），
-# 校验版本 >= 22，生成带绝对路径的 MCP 配置（跨机器、免手动装 Node）。
+# 校验版本 >= 20，生成带绝对路径的 MCP 配置（跨机器、免手动装 Node）。
 # 用法：bash scripts/setup-mcp.sh
 # 可用环境变量 SUPER_EDITOR_NODE 手动指定 node 路径。
 set -euo pipefail
@@ -18,6 +18,7 @@ fi
 # 候选 node：环境变量 > Codex 捆绑路径（常见位置）> PATH
 CANDIDATES=()
 [ -n "${SUPER_EDITOR_NODE:-}" ] && CANDIDATES+=("$SUPER_EDITOR_NODE")
+CANDIDATES+=("$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node")
 CANDIDATES+=("$HOME/Library/Application Support/Codex/bin/node") # macOS 常见位置
 CANDIDATES+=("$HOME/.local/share/Codex/bin/node")                # Linux 常见位置
 CANDIDATES+=("$HOME/.local/opt/Codex/bin/node")                  # Linux 备选位置
@@ -30,7 +31,7 @@ for c in "${CANDIDATES[@]}"; do
   if [ -x "$c" ] || [ -f "$c" ]; then
     ver="$("$c" -v 2>/dev/null || true)"
     major="$(printf '%s' "$ver" | sed -E 's/^v?([0-9]+).*/\1/')"
-    if [ -n "$major" ] && [ "$major" -ge 22 ] 2>/dev/null; then
+    if [ -n "$major" ] && [ "$major" -ge 20 ] 2>/dev/null; then
       NODE="$c"
       break
     fi
@@ -38,7 +39,7 @@ for c in "${CANDIDATES[@]}"; do
 done
 
 if [ -z "$NODE" ]; then
-  echo "[错误] 未找到 Node >= 22。请先安装 Node.js 22+，或用环境变量 SUPER_EDITOR_NODE 指定路径。" >&2
+  echo "[错误] 未找到 Node >= 20。请先安装 Node.js 20+，或用环境变量 SUPER_EDITOR_NODE 指定路径。" >&2
   exit 1
 fi
 

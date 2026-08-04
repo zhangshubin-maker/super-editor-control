@@ -23,9 +23,9 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 ## 1. 架构
 
 - **桥接层**（super-editor 仓库内实现）：`src/modules/contentEditor/aiControl/`，页面挂载 `window.__superEditor`。覆盖状态、用户与素材库查询，书本搜索/克隆创建/跳转，页面/区块/元素/大纲编辑，表格、思维导图、文本自适应、图片上传、快照回滚、保存与截图；v1.1 增加书本管理。
-- **Electron RPC 通道**（正式推荐）：Electron 在 `127.0.0.1:8765` 提供 RPC，preload 将页面轮询地址覆盖到该服务。页面开启“AI 控制”后自动注册，无需正式站点部署 RPC 路由。
-- **Electron MCP**：Electron 同端口提供 `/mcp`，插件 `.mcp.json` 直接连接该地址。`editor_*` 工具首次调用时自动选择最近活跃页面；`editor_connect()` 只用于主动检查/重连，不需要 URL。
-- **开发 RPC 兜底**：普通浏览器开发仍可使用 `vue.config.js` 的同源 `/ai-control/rpc`；在 Electron 内打开开发地址时优先使用 Electron RPC。
+- **插件本地 RPC broker**（正式推荐）：插件 MCP 进程在 `127.0.0.1:8765` 提供浏览器 RPC。页面开启“AI 控制”后自动注册，无需 Electron 或正式站点后端 RPC。
+- **插件 stdio MCP**：`.mcp.json` 启动插件自带适配器；`editor_*` 工具首次调用时自动选择可用页面。多 Codex 任务通过页面租约隔离，owner 退出后 follower 自动接管。
+- **开发 RPC 兜底**：开发页面默认也使用插件本地 broker。只有显式设置 `window.__SUPER_EDITOR_RPC_URL = window.location.origin + '/ai-control'` 时，才使用 `vue.config.js` 的同源 dev RPC。
 - **浏览器控制**：`browser:control-in-app-browser` / `chrome:control-chrome` 提供页面读取与截图；注意其 evaluate 是**只读沙箱**，看不到 `window.__superEditor`，只用于探测 DOM 标记与截图。
 
 ## 1.5 批量执行（强烈推荐，减少等待）
@@ -61,10 +61,10 @@ await b.batch({ steps: [
 
 ## 2. 连接
 
-1. 确认善版优荣 Electron 正在运行，并在 Electron 中打开目标课件。
-2. 请用户点击编辑器顶部“AI 控制”开关；DOM 标记 `data-super-editor-bridge="1"` 表示页面桥接已挂载。
+1. 在普通 Chrome / Edge 中打开目标课件；不需要 Electron 或调试模式。
+2. 请用户点击编辑器顶部“AI 控制”开关；DOM 标记 `data-super-editor-bridge="1"` 表示桥接已挂载。首次出现本地网络权限提示时选择允许。
 3. 可调用 `editor_status` 检查，或直接调用任务所需的 `editor_*` 工具；首次调用会自动连接，不要求先执行 `editor_connect`。
-4. 多标签页/多窗口时默认固定到最近开启控制的页面；需要切换时先在目标页面关闭再开启按钮，然后调用 `editor_connect()` 重新选择。
+4. 多标签页/多窗口时每个 Codex 任务租用一个页面；需要切换时先在目标页面关闭再开启按钮，然后调用 `editor_connect()` 重新选择。
 5. 所有画布写操作必须通过 MCP/桥接方法完成，禁止用鼠标键盘模拟。浏览器技能仅用于只读探测或辅助打开页面。
 
 ## 3. 标准工作流
@@ -89,8 +89,10 @@ await b.batch({ steps: [
 
 | 现象 | 处理 |
 |------|------|
-| BRIDGE_MISSING | 确认课件在 Electron 中打开且顶部“AI 控制”已开启；必要时关闭后重新开启 |
-| MCP 无法连接 | 确认善版优荣 Electron 已启动且本机 `http://127.0.0.1:8765/mcp` 可访问；更新后新开 Codex 任务 |
+| BRIDGE_MISSING | 确认普通浏览器中的课件已开启顶部“AI 控制”；必要时关闭后重新开启 |
+| MCP 无法连接 | 更新/安装插件后新开 Codex 任务；检查 `http://127.0.0.1:8765/ai-control/rpc/health`，并确认 8765 未被其他程序占用 |
+| 页面一直 waiting | 允许浏览器本地网络访问；正式站点 CSP 的 `connect-src` 加入 `http://127.0.0.1:8765` |
+| OUTCOME_UNKNOWN | 命令可能已经执行，禁止直接重放写操作；先读取页面/元素状态再决定 |
 | RPC 调用超时 | 调用 `editor_status` 检查实例；确认目标页面没有关闭/刷新，必要时重新开启顶部按钮并 `editor_connect()` |
 | `getSlide` 报 int 反序列化错误 | id 参数传了对象 → 改传标量 |
 | 截图缺内容 | 画布虚拟滚动 → 先用 `scrollToBlock` / `scrollToElement` 滚动到位再截图 |

@@ -1,65 +1,69 @@
 # super-editor-control MCP 服务端
 
-零依赖 Node MCP 服务端（stdio）。通过**同源 RPC 通道**（`/ai-control/rpc`）连接编辑器页面，把 `window.__superEditor` 桥接 API 包装成结构化工具。不依赖 CDP、不依赖浏览器调试端口。
+零 npm 依赖的 stdio MCP + 本机浏览器 RPC 中继。它把普通浏览器页面中的
+`window.__superEditor` 包装为结构化 `editor_*` 工具，不依赖 Electron、CDP、浏览器调试端口或
+正式环境后端 RPC。
 
 ## 运行要求
 
-- Node.js >= 22（依赖全局 `fetch`）。
-- 编辑器页面以 `ai_control=1` 打开，且 dev server / 后端已挂载 `/ai-control/rpc` 路由（协议见 `../../assets/production-integration-spec.md`）。
-- 连接时只需课件 URL（`pageUrl`）或编辑器 origin（`httpUrl`），插件自动解析并探测端点。
+- 直接开发运行需要 Node.js 20+。
+- 正式插件通过 `start.ps1` 优先使用 Codex 自带 Node，用户无需单独安装。
+- 浏览器打开课件后，由用户点击顶部“AI 控制”按钮注册页面。
+
+## 自动连接
+
+- MCP 进程启动时争用 `127.0.0.1:8765`。首个进程成为 broker owner，其他进程作为 follower
+  复用；owner 退出后 follower 通常在约 2 秒内自动接管。
+- `editor_*` 工具第一次调用时自动选择并租用可用页面，无需 `pageUrl` / `httpUrl`。
+- `editor_status` 只报告可用页面；没有活动连接时不会占用租约。
+- 多任务会租用不同页面；工具执行期间续租，空闲 30 秒后可被其他任务使用。
+- 同一 MCP 进程的工具串行执行；已取消且尚未开始的工具不会再发往浏览器。
 
 ## 环境变量
 
 | 变量 | 说明 |
 |------|------|
-| `SUPER_EDITOR_MOCK` | `1` 时进入 mock 模式，不连接编辑器（用于测试 MCP 协议本身） |
+| `SUPER_EDITOR_MOCK` | `1` 时进入 mock 模式，不连接编辑器 |
+| `SUPER_EDITOR_RPC_PORT` | 本机 broker 端口，默认 `8765` |
+| `SUPER_EDITOR_NODE` | `start.ps1` 优先使用的 Node 可执行文件 |
 
-## 启动
+## 启动与测试
 
-```bash
+```powershell
+node index.js
+npm test
+```
+
+Mock：
+
+```powershell
+$env:SUPER_EDITOR_MOCK = '1'
 node index.js
 ```
 
-或测试 MOCK 模式：
-
-```bash
-set SUPER_EDITOR_MOCK=1
-node index.js
-```
-
-## 工具列表
+## 主要工具
 
 | 工具 | 作用 |
 |------|------|
-| `editor_status` | 连接状态 / 桥接就绪检测 |
-| `editor_connect` | 连接编辑器页面（同源 RPC）：`pageUrl` 课件完整 URL 或 `httpUrl` origin，二选一；返回固定路由的 `instanceId` |
-| `editor_get_user_info` | 获取当前登录用户信息 |
-| `editor_search_books` / `editor_get_book` | 搜索书本并读取源书完整属性 |
-| `editor_create_book` | 以现有书本为基线创建新书；默认 light 仅继承属性，full 才复制目录和内容 |
-| `editor_jump_to_book` | 返回书本编辑器 URL，或在当前页/新标签执行跳转 |
-| `editor_search_templates` / `editor_get_template` / `editor_apply_template` | 搜索、查看并应用样章/区块模板 |
-| `editor_search_components` / `editor_apply_component` | 搜索系统/个人组件并应用到区块 |
-| `editor_search_images` / `editor_apply_image` | 搜索本书/总图片素材库并新增或替换图片 |
-| `editor_get_state` / `editor_list_slides` / `editor_get_slide` / `editor_select_slide` | 课件与页面查询 |
-| `editor_add_block` / `editor_update_block` / `editor_delete_block` | 区块增改删 |
-| `editor_add_element` / `editor_update_element` / `editor_delete_element` / `editor_order_element` | 元素增改删与层级 |
-| `editor_group_elements` / `editor_ungroup` | 打组/拆组 |
-| `editor_undo` / `editor_redo` | 撤销/重做（ai_control 已禁用，返回 disabled 提示） |
-| `editor_checkpoint` / `editor_rollback` / `editor_list_checkpoints` / `editor_clear_checkpoints` | 整页快照：创建 / 回滚 / 列出 / 清理（ai_control 替代撤销重做） |
-| `editor_save` | 保存 |
-| `editor_table_info` / `editor_table_set_cell` / `editor_table_update` / `editor_table_structure` / `editor_table_fit_heights` | 表格：读取结构/网格、改单元格、整表更新、行列增删与合并拆分、行高自适应收紧 |
-| `editor_mind_info` / `editor_mind_set_node` / `editor_mind_structure` / `editor_mind_update` | 思维导图：读节点树、改节点文本/样式、增删节点、整图替换与模板主题 |
-| `editor_text_info` / `editor_text_set_content` / `editor_text_adaptive` / `editor_text_fit` | 文本：读结构/自适应模式、改内容并触发宽高自适应、切 extendType、强制重测（含组内联动位移返回） |
-| `editor_outline_info` / `editor_outline_refresh` / `editor_outline_add` / `editor_outline_rename` / `editor_outline_delete` / `editor_outline_move` / `editor_outline_link_blocks` / `editor_outline_select` | 大纲：读当前/任意目录大纲树、刷新、增删改查、移动排序、关联区块、选中节点（v0.8） |
-| `editor_outline_anchor_list` / `editor_outline_anchor_add` / `editor_outline_anchor_update` / `editor_outline_anchor_delete` | 大纲锚点：查询 / 新增 / 修改 / 删除（type 1=位置锚点，2=检索锚点） |
-| `editor_upload_image` / `editor_add_image_element` / `editor_set_image_src` | 图片：上传本地图片（路径或 base64）获取 url、上传并新增图片元素、上传并替换图片 src（v0.9，配合模型生图能力使用） |
-| `editor_batch` | 批量执行多步骤（一次往返串行执行 `steps: [{ method, args }]`，一次返回全部结果；`stopOnError` 默认遇错即停） |
-| `editor_screenshot` | 画布截图（走桥接 `screenshot()`，data URL） |
+| `editor_status` / `editor_connect` | 查看可用页面 / 主动重新选择页面 |
+| `editor_get_state` / `editor_get_slide` | 读取课件与页面 |
+| `editor_search_books` / `editor_get_book` / `editor_create_book` | 搜索、核对并创建书本 |
+| `editor_search_templates` / `editor_apply_template` | 搜索并应用模板 |
+| `editor_search_components` / `editor_apply_component` | 搜索并应用组件 |
+| `editor_search_images` / `editor_apply_image` | 搜索并应用图片素材 |
+| `editor_add_block` / `editor_update_block` / `editor_delete_block` | 区块编辑 |
+| `editor_add_element` / `editor_update_element` / `editor_delete_element` | 元素编辑 |
+| `editor_checkpoint` / `editor_rollback` | 整页快照与回滚 |
+| `editor_save` / `editor_screenshot` | 保存与渲染核对 |
+| `editor_batch` | 一次往返串行执行多个桥接步骤 |
 
-所有 `editor_*` 工具内部调用 `window.__superEditor`，桥接契约见 `../../assets/bridge-api-spec.md`；编辑器侧实现步骤见 `../../assets/editor-integration-guide.md`。
+完整工具以 `tools/list` 为准，桥接契约见 `../../assets/bridge-api-spec.md`。
 
-## 与浏览器技能的配合
+## 故障语义
 
-- 数据读写一律走 MCP（RPC 通道）；浏览器技能只用于**打开页面、只读探测与截图**（其 evaluate 是只读沙箱，看不到 `window.__superEditor`）。
-- 打开新页面标签用浏览器技能（RPC 模式无法开新标签），页面打开后再 `editor_connect`。
-- 截图注意：无 CDP 整页截图，`editor_screenshot` 依赖桥接 `screenshot()`（html2canvas，只含已渲染区块）；需要整页效果时先滚动分段截图或用浏览器技能截取页面视口。
+- 命令仍在队列时超时或 broker 关闭：明确返回未派发，可安全重试。
+- MCP 取消通知只跳过尚未开始的工具；请求连接中断或客户端释放时，broker 会移除尚未派发的命令。
+- 命令已发送到页面后连接中断、超时或 owner 退出：返回 `OUTCOME_UNKNOWN`，不得自动重放写操作；
+  应先读取页面状态再决定是否重试。
+- 页面关闭/关闭 AI 控制时，队列命令失败；在途命令同样按结果未知处理。
+- stdout 只输出 MCP JSON；运行日志和启动错误只能写 stderr。

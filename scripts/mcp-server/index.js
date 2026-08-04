@@ -1,26 +1,23 @@
-// Super Editor Control MCP 服务端（stdio + JSON-RPC，零依赖）。
-// 通过同源 RPC 通道连接编辑器页面，把 window.__superEditor 桥接 API 包装成 editor_* 工具。
+// Super Editor Control MCP 服务端（stdio + JSON-RPC + 本机浏览器 RPC 中继，零依赖）。
+// 浏览器页面轮询 127.0.0.1:8765，MCP 工具自动连接最近开启“AI 控制”的页面。
 // 运行：node index.js（可在环境变量 SUPER_EDITOR_MOCK=1 时 mock 测试）。
 import { createInterface } from 'node:readline'
 import * as driver from './driver.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.5.1' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.6.0' }
 
 const TOOLS = [
   {
     name: 'editor_status',
-    description: '返回 MCP 与页面的连接状态（mode: rpc/mock）、页面 URL、固定路由的页面实例 ID（instanceId）、桥接是否就绪、是否 mock 模式。',
+    description: '返回插件本地 RPC 中继、浏览器页面自动连接状态、固定路由的页面实例 ID 和桥接是否就绪。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
     name: 'editor_connect',
-    description: '连接到编辑器页面（同源 RPC 通道，无需 CDP）。pageUrl 传课件完整 URL（自动解析 origin），或 httpUrl 直接传编辑器 origin（如 http://localhost:8090），二选一。',
+    description: '自动连接最近在浏览器中开启“AI 控制”的编辑器页面。通常无需手动调用，其他工具首次使用时也会自动连接。',
     inputSchema: {
       type: 'object',
-      properties: {
-        httpUrl: { type: 'string', description: '编辑器 origin（如 http://localhost:8090）' },
-        pageUrl: { type: 'string', description: '课件完整 URL（含 ai_control=1），优先于 httpUrl' }
-      },
+      properties: {},
       additionalProperties: false
     }
   },
@@ -80,8 +77,7 @@ const TOOLS = [
         coverImgId: { type: ['string', 'number'], description: '已有封面文件 id' },
         coverImgUrl: { type: 'string', description: '已有封面 URL，通常与 coverImgId 一起传' },
         coverType: { type: 'number', enum: [0, 1], description: '封面样式：0 竖版，1 横版' },
-        includeToken: { type: 'boolean', description: '返回的编辑器 URL 是否包含登录 token，默认 false' },
-        aiControl: { type: 'boolean', description: '返回 URL 是否带 ai_control=1，默认 true' }
+        includeToken: { type: 'boolean', description: '返回的编辑器 URL 是否包含登录 token，默认 false' }
       },
       required: ['sourceBookId'],
       additionalProperties: false
@@ -89,14 +85,13 @@ const TOOLS = [
   },
   {
     name: 'editor_jump_to_book',
-    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 在当前页跳转；new 尝试打开新标签页。跳转后应重新调用 editor_connect。',
+    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 在当前页跳转；new 尝试打开新标签页。跳转后的页面需由用户点击顶部“AI 控制”按钮，插件随后会自动连接。',
     inputSchema: {
       type: 'object',
       properties: {
         bookId: { type: ['string', 'number'], description: '目标书本 id' },
         target: { type: 'string', enum: ['url', 'current', 'new'], description: '默认 url' },
-        includeToken: { type: 'boolean', description: 'URL 是否包含登录 token，默认 false' },
-        aiControl: { type: 'boolean', description: '是否带 ai_control=1，默认 true' }
+        includeToken: { type: 'boolean', description: 'URL 是否包含登录 token，默认 false' }
       },
       required: ['bookId'],
       additionalProperties: false
@@ -990,20 +985,11 @@ async function callTool(name, args) {
   let data
   switch (name) {
     case 'editor_status': {
-      data = { ...driver.pageInfo() }
-      if (driver.isConnected()) {
-        try {
-          await driver.bridgeCall('ping')
-          data.bridgeReady = true
-        } catch (err) {
-          data.bridgeReady = false
-          data.bridgeError = err.message
-        }
-      }
+      data = await driver.getStatus()
       break
     }
     case 'editor_connect':
-      data = await driver.connect(args.httpUrl, args.pageUrl)
+      data = await driver.connect()
       break
     case 'editor_get_user_info':
       data = await driver.bridgeCall('getUserInfo', [{ refresh: !!args.refresh }])
@@ -1343,6 +1329,49 @@ async function callTool(name, args) {
   return { content: [{ type: 'text', text }] }
 }
 
+// 同一 MCP 进程内串行执行工具，避免 connect/status/close 与写操作交错释放页面租约。
+let toolCallTail = Promise.resolve()
+const queuedToolCalls = new Map()
+
+function enqueueToolCall(requestId, name, args) {
+  if (queuedToolCalls.has(requestId)) {
+    return Promise.reject(new McpError(-32600, 'Duplicate JSON-RPC request id: ' + requestId))
+  }
+
+  let rejectCancellation
+  const entry = {
+    cancelled: false,
+    started: false,
+    rejectCancellation: null
+  }
+  const cancellation = new Promise((resolve, reject) => {
+    rejectCancellation = reject
+  })
+  entry.rejectCancellation = rejectCancellation
+  queuedToolCalls.set(requestId, entry)
+
+  const execution = toolCallTail.then(() => {
+    if (entry.cancelled) {
+      throw new McpError(-32800, 'Request cancelled before execution')
+    }
+    entry.started = true
+    return callTool(name, args)
+  })
+  toolCallTail = execution.catch(() => {})
+
+  return Promise.race([execution, cancellation]).finally(() => {
+    if (queuedToolCalls.get(requestId) === entry) queuedToolCalls.delete(requestId)
+  })
+}
+
+function cancelQueuedToolCall(requestId) {
+  const entry = queuedToolCalls.get(requestId)
+  if (!entry || entry.started || entry.cancelled) return false
+  entry.cancelled = true
+  entry.rejectCancellation(new McpError(-32800, 'Request cancelled before execution'))
+  return true
+}
+
 async function handleRequest(req) {
   switch (req.method) {
     case 'initialize': {
@@ -1359,11 +1388,17 @@ async function handleRequest(req) {
     case 'tools/list':
       return { tools: TOOLS }
     case 'tools/call':
-      return callTool(req.params && req.params.name, (req.params && req.params.arguments) || {})
+      return enqueueToolCall(
+        req.id,
+        req.params && req.params.name,
+        (req.params && req.params.arguments) || {}
+      )
     default:
       throw new McpError(-32601, 'Method not found: ' + req.method)
   }
 }
+
+await driver.initialize()
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 
@@ -1384,8 +1419,17 @@ rl.on('line', (line) => {
   } catch {
     return
   }
-  // JSON-RPC 请求 ID 可以是 0；只有完全未提供 id 的消息才是通知。
-  if (!Object.prototype.hasOwnProperty.call(req, 'id')) return
+  // JSON-RPC 请求 ID 可以是 0；没有 id 的 cancellation notification 只取消尚未开始的工具。
+  if (!Object.prototype.hasOwnProperty.call(req, 'id')) {
+    if (
+      req.method === 'notifications/cancelled' &&
+      req.params &&
+      Object.prototype.hasOwnProperty.call(req.params, 'requestId')
+    ) {
+      cancelQueuedToolCall(req.params.requestId)
+    }
+    return
+  }
   handleRequest(req).then(
     (result) => send({ jsonrpc: '2.0', id: req.id, result }),
     (err) => {
@@ -1395,18 +1439,38 @@ rl.on('line', (line) => {
         send({
           jsonrpc: '2.0',
           id: req.id,
-          result: { content: [{ type: 'text', text: '[error] ' + err.message }], isError: true }
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  { errorCode: err.code || 'TOOL_ERROR', error: err.message || String(err) },
+                  null,
+                  2
+                )
+              }
+            ],
+            isError: true
+          }
         })
       }
     }
   )
 })
 
-process.on('SIGINT', () => {
-  driver.closeActive()
-  process.exit(0)
-})
-process.on('SIGTERM', () => {
-  driver.closeActive()
-  process.exit(0)
-})
+let shuttingDown = false
+
+function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  const forceExitTimer = setTimeout(() => process.exit(1), 5000)
+  driver.shutdown().finally(() => {
+    clearTimeout(forceExitTimer)
+    process.exit(0)
+  })
+}
+
+rl.on('close', shutdown)
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
+process.on('disconnect', shutdown)

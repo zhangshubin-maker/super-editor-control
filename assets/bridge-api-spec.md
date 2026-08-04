@@ -65,9 +65,9 @@
 | `getUserInfo(payload?)` | `{ refresh? }` | 当前登录用户信息；优先读 Vuex，缺失或 refresh 时请求账号接口 |
 | `searchBooks(payload)` | `{ query?, bookType?=6, smartBookType?, subjectId?, gradeId?, period?, volume?, pageNo?, pageSize?, filters? }` | `{ items, pageNo, pageSize, total, paginator }`；调用 `getbooklist`，结果补充 `smart_book_type_name` |
 | `getBookInfo(payload)` | `{ bookId }` | `getbookinfo` 完整书本属性、学科、关联教材、分类和版本信息 |
-| `buildBookEditorUrl(payload)` | `{ bookId, aiControl?=true, includeToken?=false }` | 继承当前编辑器环境的目标书本 URL |
-| `jumpToBook(payload)` | `{ bookId, target?: url/current/new, aiControl?, includeToken? }` | `{ bookId, url, target, scheduled?/opened? }` |
-| `createBookFromSource(payload)` | `{ sourceBookId, copyMode?: light/full, name?, backgroundName?, smartBookType?, coverImgId?, coverImgUrl?, coverType?, aiControl?, includeToken? }` | 默认 light 只继承外部属性；full 复制目录和内容。返回 `{ sourceBookId, bookId, copyMode, includesCatalogAndContent, cloneMethod, book, editorUrl }` |
+| `buildBookEditorUrl(payload)` | `{ bookId, includeToken?=false }` | 继承当前编辑器环境的目标书本 URL；主动删除旧 `ai_control` 参数 |
+| `jumpToBook(payload)` | `{ bookId, target?: url/current/new, includeToken? }` | `{ bookId, url, target, scheduled?/opened? }`；目标页由用户重新点击顶部按钮 |
+| `createBookFromSource(payload)` | `{ sourceBookId, copyMode?: light/full, name?, backgroundName?, smartBookType?, coverImgId?, coverImgUrl?, coverType?, includeToken? }` | 默认 light 只继承外部属性；full 复制目录和内容。返回 `{ sourceBookId, bookId, copyMode, includesCatalogAndContent, cloneMethod, book, editorUrl }` |
 | `searchTemplates(payload)` | `{ kind?: chapter/block, query?, pageNo?, pageSize?, classifyId?, parentId?, timeSort? }` | 本书可用模板 `[{ id, name, type, kind, parentId, classifyId, cover, updatedAt }]` |
 | `listTemplates(payload)` | 同 `searchTemplates` | `searchTemplates` 兼容别名 |
 | `getTemplateDetail(payload)` | `{ templateId, parseContent? }` | `{ id, name, type, content, childList, lines }` |
@@ -317,21 +317,20 @@
 ## 6. 安全
 
 - 桥接只在用户主动开启顶部“AI 控制”后挂载；关闭按钮或页面销毁时必须卸载。
-- 调用一律走 §6.5 的 RPC 通道（方法白名单在页面/服务端过滤）；本插件不新增远程端口，不暴露任意代码执行。
+- 调用一律走 §6.5 的 RPC 通道；插件只监听回环地址 `127.0.0.1`，不监听局域网网卡。
 - 建议给桥接增加调用白名单/频率限制（可选）。
 ## 6.5 RPC 通道（推荐调用方式，生产/开发通用）
 
 编辑器侧（`src/modules/contentEditor/aiControl/index.js`）在挂载桥接时同时启动两类通道：
 
-### 方式 A：同源 HTTP RPC 通道（推荐，生产/开发通用）
-- 桥接主世界每 400ms 轮询 `{origin}/ai-control/rpc/poll?instance=<页面实例ID>`（默认 `window.location.origin + '/ai-control'`；可用 `window.__SUPER_EDITOR_RPC_URL` 覆盖为独立本地服务，如 `http://127.0.0.1:8765`）；
-- dev server（`vue.config.js` devServer.before）已内置全部端点；生产由后端按 `assets/production-integration-spec.md` 提供；
-- 外部服务（RPC 服务端）为每个页面实例维护命令队列；poll 到队列有命令时返回 `{ id, method, args }`，否则返回 204；
-- 桥接执行 `window.__superEditor[method](...args)` 后 POST 结果到 `/rpc/result`：`{ id, ok, value|error }`；`ping()` 返回 `instanceId`（页面自身实例 ID）；
-- 调用方 `POST {origin}/ai-control/rpc/request`：`{ method, args, timeoutMs?, targetInstance? }`，服务端入队并**长轮询等待结果**（最多 90s）后响应 `{ ok, value, error, instance }`（`instance` 为实际路由的页面实例 ID）；页面实例 ID 在 `<html data-se-rpc-instance="...">` 上，`ping()` 也会返回 `instanceId`；多标签页时用 `targetInstance` 精确路由，避免旧页面抢执行；
-- 实例管理：服务端按 poll 心跳维护实例列表（30s 无 poll 自动清理），`request` 不带 `targetInstance` 时路由到最近 20s 内活跃的实例；调用方可先 `ping()`（不带 target）拿 `instance` 字段，之后所有调用固定带 `targetInstance`，避免多标签页串台；
-- 特性：不依赖 CDP 端口、不依赖鼠标、无跨域；`args` 一律为数组，方法缺失/抛错时 `ok=false` 且返回可读 `error` 文本（优先 message/msg/desc，兜底 JSON 序列化）；
-- 服务端需要允许 CORS（`Access-Control-Allow-Origin: *`）并处理 OPTIONS 预检（同源调用其实不需要）。
+### 方式 A：插件本机 HTTP RPC（推荐，生产/开发通用）
+- 桥接默认长轮询 `http://127.0.0.1:8765/ai-control/rpc/poll?instance=<页面实例ID>`；`window.__SUPER_EDITOR_RPC_URL` 仅用于开发时覆盖基地址；
+- broker 由插件 MCP 进程提供，正式后端和 Electron 都不需要部署 RPC；多个 MCP 进程自动选主和故障接管；
+- 每次开启按钮生成新的 instance ID。poll 有命令时返回 `{ id, method, args }`，无命令最长等待 20 秒后返回 204；
+- 桥接只执行一次 `window.__superEditor[method](...args)`，随后 POST `{ id, instance, ok, value, error, errorCode? }`；结果传输失败只重发同一结果；
+- MCP 驱动使用 `clientId` 租用页面并固定 `targetInstance`，多任务不会串台；页面心跳 TTL 120 秒，空闲租约 TTL 30 秒；
+- broker 对 CORS/PNA 预检返回 `Access-Control-Allow-Private-Network: true`。正式页面需 HTTPS，CSP `connect-src` 需允许 `http://127.0.0.1:8765`；
+- 已派发命令发生断连时返回 `OUTCOME_UNKNOWN`，调用方必须先读取状态，禁止自动重放写操作。完整协议见 `production-integration-spec.md`。
 
 ### 方式 B：DOM 属性通道（备用，供可写 DOM 的隔离环境）
 - 请求：`document.documentElement.setAttribute('data-se-rpc-req', JSON.stringify({ id, method, args }))`；
@@ -343,8 +342,8 @@
 
 ### 7.1 探测与连接
 - 页面挂载后 `document.documentElement` 会出现 `data-super-editor-bridge="1"` 属性，卸载时移除。任何隔离世界/主世界都可以用它探测桥接是否就绪。
-- 浏览器扩展类控制工具（如 content-script 沙箱）通常**看不到** `window.__superEditor`，此时以 DOM 标记为准；真正调用方法一律走 §6.5 同源 RPC 通道（页面侧轮询执行，等效主世界调用）。
-- URL 带 `token` 时，任意浏览器打开该 URL 即可直接鉴权；调用方只需能访问同源 RPC 路由。
+- 浏览器扩展类控制工具（如 content-script 沙箱）通常**看不到** `window.__superEditor`，此时以 DOM 标记为准；真正调用方法一律走 §6.5 插件本地 RPC 通道。
+- URL 带 `token` 时，普通浏览器可沿用既有鉴权；RPC broker 不参与业务登录。
 
 ### 7.2 参数约定（重要）
 - `getSlide(slideId)` / `selectSlide(slideId)` / `deleteBlock(blockId)` 等方法的 id 参数一律是**标量**（string/number），传 `{ slideId }` 对象会触发服务端反序列化错误（`Cannot deserialize ... int from Object`）。

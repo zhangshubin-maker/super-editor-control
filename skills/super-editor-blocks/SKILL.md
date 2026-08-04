@@ -27,7 +27,7 @@ description: 超媒编辑器（super-editor-control 插件）区块操作技能�
 ## 2. 新增区块（addBlock）
 
 ```js
-// 同源 RPC 调用示例：在某个区块后面插入 794x200 的新区块
+// 桥接调用示例：在某个区块后面插入 794x200 的新区块
 (async () => {
   const b = window.__superEditor
   const r = await b.addBlock({

@@ -1,5 +1,17 @@
 {
   "super-editor": {
-    "url": "http://127.0.0.1:8765/mcp"
+    "command": "powershell.exe",
+    "args": [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "./scripts/mcp-server/start.ps1"
+    ],
+    "cwd": ".",
+    "startup_timeout_sec": 15,
+    "tool_timeout_sec": 120
   }
 }

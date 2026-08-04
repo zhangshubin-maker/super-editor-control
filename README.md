@@ -1,56 +1,89 @@
 # Super Editor Control
 
-让 Codex 像控制 Figma 一样控制超媒编辑器（`super-editor`）的 Codex 插件：skill + MCP + 浏览器画布控制。
+让 Codex 在普通 Chrome / Edge 浏览器中控制超媒编辑器（`super-editor`）的 Codex 插件。插件同时承担：
 
-## 组成
+- stdio MCP 适配器：向 Codex 提供结构化 `editor_*` 工具。
+- 本机浏览器 RPC 中继：在 `127.0.0.1:8765` 维护页面实例、命令队列和结果回传。
+- 编辑工作流技能：覆盖书本、模板、素材、页面、区块、元素、大纲、保存和回滚。
 
-- `skills/super-editor-control/SKILL.md` — 核心技能：连接编辑器、调用桥接 API 的工作流与规则。
-- `skills/super-editor-outline/SKILL.md` — 大纲（图层面板左侧「大纲」树）技能：增删改查、移动排序、关联区块、锚点操控（v0.8）。
-- `skills/super-editor-assets/SKILL.md` — 用户与设计素材技能：搜索并应用本书样章/区块模板、系统/个人组件和本书/总图片素材库（v1.0）。
-- `skills/super-editor-books/SKILL.md` — 书本管理技能：搜索、读取源书、克隆创建新书和编辑器跳转（v1.1）。
-- 图片上传与使用（v0.9）：`editor_upload_image` / `editor_add_image_element` / `editor_set_image_src`，把本地生成图片上传到课件媒体库并放入画布（配合模型生图能力）。
-- 模板与素材复用（v1.0）：获取用户信息，搜索并应用样章模板、区块模板、组件库与图片素材，让 AI 先盘点本书资源再自主设计新目录。
-- 书本管理（v1.2）：搜索当前用户可访问书本；默认轻量继承源书外部属性创建空内容新书，明确需要时才完整复制目录和内容；支持覆盖名称、教辅类型、封面及编辑器跳转。
-- `.mcp.json` — 直接连接 Electron 内置的 `http://127.0.0.1:8765/mcp`，无需插件自行启动 Node 进程。
-- Electron MCP 适配层 — 自动发现 Electron 中已开启“AI 控制”的编辑器页面，并把 `window.__superEditor` 包装成结构化工具（`editor_*`）。
-- `assets/bridge-api-spec.md` — `window.__superEditor` 桥接 API 契约（编辑器侧需要实现的接口）。
-- `assets/editor-integration-guide.md` — 在 super-editor 仓库内实现桥接层的逐步指南。
+整个正式链路不依赖 Electron、CDP、浏览器调试端口或正式环境后端 RPC 路由。
+
+## 工作方式
+
+```text
+Codex ──stdio──> 插件 MCP 进程 ──本机 RPC──> 普通浏览器页面
+                                      <── 页面长轮询并调用 window.__superEditor
+```
+
+1. Codex 新任务加载插件时自动启动 MCP 进程。
+2. 首个 MCP 进程监听 `127.0.0.1:8765`；其他任务复用它，并在 owner 退出后自动接管。
+3. 用户在浏览器中打开课件并点击顶部“AI 控制”。页面随即轮询本机中继并注册。
+4. 任意 `editor_*` 工具首次调用时自动租用一个可用页面；不需要传 URL，也不需要先调用
+   `editor_connect`。
+5. 多个 Codex 任务同时运行时会租用不同页面，避免串台；空闲租约会自动过期。
 
 ## 前置条件
 
-- 已安装并运行包含 AI Control MCP 的善版优荣 Electron 桌面端。
-- Electron 中已打开 super-editor 课件页面，并点击编辑器顶部“AI 控制”开关。
-- 已安装 Codex 桌面端和本插件；插件本身不再要求用户安装 Node.js。
+- 安装 Codex 桌面端和本插件。
+- 正式网页包含 `src/modules/contentEditor/aiControl/` 的浏览器 RPC 客户端，并通过 HTTPS 发布。
+- 使用支持本地网络访问授权的新版 Chrome / Edge。首次开启时若浏览器询问本地网络权限，选择“允许”。
 
+用户不需要安装 Electron，也不需要另装 Node.js。插件启动器优先使用 Codex 自带的 Node 运行时，
+仅在找不到时才回退到系统 Node.js 20+。
 
-## 自动连接
+若正式站点设置 CSP，`connect-src` 必须包含 `http://127.0.0.1:8765`。页面位于跨域 iframe 时，
+宿主页还需要向该 iframe 委派 `loopback-network` 权限。
 
-插件固定连接 Electron 本机 MCP 地址 `http://127.0.0.1:8765/mcp`。用户只需先启动 Electron、打开课件并开启顶部“AI 控制”；Codex 调用任意 `editor_*` 工具时会自动选择最近活跃的页面。`editor_connect` 仅用于主动检查/重新选择，不再接收 `pageUrl` 或 `httpUrl`。
+## 使用
 
-开发环境也兼容：只要开发页面在 Electron 内打开，preload 会将页面 RPC 指向 Electron；`vue.config.js` 的 dev RPC 可以继续作为普通浏览器开发的兜底。
+1. 安装或更新插件后新开一个 Codex 任务。
+2. 在普通浏览器中登录并打开目标课件。
+3. 点击顶部“AI 控制”；提示本地网络权限时允许。
+4. 直接让 Codex 制作或修改课件。页面按钮提示“AI 控制已连接”后即可执行。
+
+`editor_status` 是只读检查，不会长期占用页面。`editor_connect` 仅用于主动重新选择页面。
+
 ## 安装
 
-**本机个人使用**（personal marketplace 已生成）：
+本机 personal marketplace：
 
-1. `codex plugin add super-editor-control@personal`
-2. 启动善版优荣 Electron，再新开一个 Codex 会话（技能与 MCP 工具在新会话中生效）。
-3. 在 Electron 中打开课件并点击顶部“AI 控制”。
-4. 直接让 Codex 制作或修改课件；工具会自动连接，无需提供课件 URL。
+```powershell
+codex plugin add super-editor-control@personal
+```
 
-若 Codex 会话打开时 Electron 尚未运行，该会话可能没有加载 MCP 工具；启动 Electron 后新开一个 Codex 会话即可。
+Git marketplace 发布版：
 
-**Git 市场发布版**（本仓库即插件市场，`.agents/plugins/marketplace.json`）：
+```powershell
+codex plugin marketplace add <owner>/super-editor-control
+codex plugin add super-editor-control@super-editor-control
+```
 
-1. 注册市场：`codex plugin marketplace add <owner>/super-editor-control`（私有仓库填 Git URL 也可）
-2. 安装插件：`codex plugin add super-editor-control@super-editor-control`
-3. 桌面 App 用户：打开「插件目录」→ 选择对应 marketplace → 安装。
-4. 新开会话后即可使用，用法同上。
+插件更新后使用 `codex plugin update` 或重新安装，并新开任务加载新 MCP 配置。
 
-更新插件：推送新版本到仓库后，使用者执行 `codex plugin update`（或重新安装）。
+## 组成
 
-## 开发
+- `.mcp.json`：启动插件自带的 stdio MCP。
+- `scripts/mcp-server/start.ps1`：自动定位 Codex 捆绑或系统 Node 运行时。
+- `scripts/mcp-server/index.js`：MCP 工具适配器。
+- `scripts/mcp-server/rpc-broker.js`：本机 RPC 中继、选主接管、页面租约和故障语义。
+- `skills/`：总控及书本、素材、状态、区块、元素、画布、大纲子技能。
+- `assets/bridge-api-spec.md`：`window.__superEditor` 桥接契约。
+- `assets/production-integration-spec.md`：浏览器与插件本地 RPC 协议及部署要求。
 
-- 修改插件配置或技能后重装插件：
-  `python C:/Users/shubin/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py C:/Users/shubin/plugins/super-editor-control`
-  然后 `codex plugin add super-editor-control@personal`。
-- `scripts/mcp-server/` 保留为旧版独立 stdio 调试实现，正式插件不再引用；正式链路在 Electron 项目中测试。
+## 开发与验证
+
+```powershell
+cd scripts/mcp-server
+npm test
+```
+
+测试覆盖 CORS/LNA 响应头、长轮询、结果幂等、页面租约、客户端中断与 MCP 取消、
+queued/in-flight 故障语义、串行工具、两个 MCP 进程选主、owner 强制退出后的接管、
+截断响应和有界关闭。
+
+直接调试可运行 `node scripts/mcp-server/index.js`；需要 mock 时设置
+`SUPER_EDITOR_MOCK=1`。默认端口可用 `SUPER_EDITOR_RPC_PORT` 覆盖，但网页端必须通过
+`window.__SUPER_EDITOR_RPC_URL` 指向同一端口。
+
+修改插件后按开发流程更新 cachebuster、校验并重新安装。`scripts/setup-mcp.ps1` 仅作为旧版手动
+配置/诊断兜底，正常安装不需要执行。

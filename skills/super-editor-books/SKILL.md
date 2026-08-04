@@ -9,7 +9,7 @@ description: 超媒编辑器（super-editor-control 插件）的书本管理技�
 
 ## 搜索与选择源书
 
-1. 在 Electron 中打开任意已登录的超媒编辑器页面，并开启顶部“AI 控制”。
+1. 在普通浏览器中打开任意已登录的超媒编辑器页面，并开启顶部“AI 控制”。
 2. 调用 `editor_search_books({ query, smartBookType?, pageNo?, pageSize? })`。
 3. 名称相近时，调用 `editor_get_book({ bookId })` 核对学科、年级、版本、关联教材、
    `smart_book_type` 和封面，不能仅凭名称猜源书。
@@ -64,8 +64,8 @@ description: 超媒编辑器（super-editor-control 插件）的书本管理技�
 - `new`：尝试打开新标签页；浏览器阻止弹窗时使用返回的 URL 手动打开。
 - `current`：当前编辑器页延迟跳转。
 
-跳转会让原页面 RPC 实例失效。目标页加载完成后，使用返回 URL 重新调用
-`editor_connect`，再用 `editor_status` 验证 `bridgeReady=true`。仅在跨会话打开确实需要时传
+跳转会让原页面 RPC 实例失效。目标页加载完成后，请用户重新点击顶部“AI 控制”，插件会自动
+发现；必要时调用 `editor_connect` 重新选择，再用 `editor_status` 验证 `bridgeReady=true`。仅在跨会话打开确实需要时传
 `includeToken: true`；同一页面或同源新标签通常不必把 token 放进 URL。
 
 ## 推荐完整流程

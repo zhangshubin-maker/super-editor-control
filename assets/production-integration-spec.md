@@ -1,122 +1,196 @@
-# Super Editor AI 控制通道：旧版同源 RPC 兼容规范
+# Super Editor 浏览器本地 RPC 集成规范
 
-> 当前正式推荐方案已改为 Electron 内置 MCP + RPC，正式环境后端不需要实现本文路由。
-> 本文仅保留给普通浏览器开发和无法使用 Electron 的旧版兼容场景。
+## 1. 正式架构
 
-## 1. 总体架构
-
+```text
+Codex
+  │ stdio MCP
+  ▼
+super-editor-control 插件进程
+  ├─ MCP 工具适配器
+  └─ http://127.0.0.1:8765/ai-control/rpc
+                         ▲
+                         │ CORS + Local Network Access
+                         │ 长轮询 poll / result
+                         ▼
+HTTPS 正式网页中的 window.__superEditor
 ```
-旧版独立 MCP/脚本                              编辑器页面（顶部开启 AI 控制）
-        │  POST /ai-control/rpc/request              │  GET /ai-control/rpc/poll?instance=xxx（每 400ms）
-        │  （长轮询，最多 90s 等结果）                 │  （队列有命令 → 执行 window.__superEditor 方法）
-        ▼                                            ▼
-  ┌───────────────────────┐                  ┌───────────────────────┐
-  │  后端 / 网关（服务端）  │◄────────────────►│  页面桥接（页面进程内） │
-  │  命令队列 + 结果暂存    │   POST /result    │  window.__superEditor │
-  └───────────────────────┘                  └───────────────────────┘
+
+- 插件同时承担 MCP 适配器和浏览器 RPC broker。
+- 正式环境后端、网关和 Electron 都不需要实现 RPC 路由。
+- 页面只在用户点击顶部“AI 控制”后连接本机 broker；关闭按钮或离开页面时注销。
+- 不使用 CDP、远程调试端口或鼠标键盘模拟。
+
+## 2. 网页端要求
+
+页面默认基地址：
+
+```js
+window.__SUPER_EDITOR_RPC_URL || 'http://127.0.0.1:8765/ai-control'
 ```
 
-- 服务端只需维护：`按 instance 的命令队列` + `按 requestId 的结果暂存`，无状态、可水平扩展。
-- 页面只轮询自己的同源地址，无跨域、无额外端口、无独立服务进程。
-- 旧版脚本通过页面 URL 解析 `origin`；当前 Codex 插件不再使用这条链路。
+生产部署必须满足：
 
-## 2. 路由规范
+1. 页面本身使用 HTTPS。
+2. 若设置 CSP，`connect-src` 包含 `http://127.0.0.1:8765`。
+3. Chrome / Edge 首次询问本地网络访问权限时，用户选择允许。
+4. 页面位于跨域 iframe 时，宿主页向 iframe 委派 `loopback-network` 权限。
+5. 不再通过 `ai_control=1` URL 参数开启；唯一入口是顶部按钮。
 
-挂载前缀：`/ai-control/rpc`（与页面 `window.__superEditor` 轮询代码中的 `RPC_POLL_URL` 一致；页面默认 `window.location.origin + '/ai-control'`，再拼 `/rpc/*`）。
+`window.__SUPER_EDITOR_RPC_URL` 只用于开发或改变 broker 端口。正式默认无需注入。
 
-### 2.1 GET `/ai-control/rpc/poll?instance=<页面实例ID>`
+## 3. 传输协议
 
-- 页面每 400ms 调用一次；`instance` 是页面实例 ID（见 §3），首次出现即视为注册。
-- 有该实例的待执行命令：返回 `200`，body 为命令：
+固定前缀：`/ai-control/rpc`。
+
+### 3.1 页面长轮询
+
+`GET /poll?instance=<页面实例ID>`
+
+- 首次 poll 即注册页面实例。
+- 有命令时返回 `200`：
+
   ```json
-  { "id": "req-xxx", "method": "getSlide", "args": [3562] }
+  { "id": "req-uuid", "method": "getSlide", "args": [3562] }
   ```
-- 无命令：返回 `204 No Content`。
-- 页面取到命令后执行 `window.__superEditor[method](...args)`，随后 POST 结果（见 2.2）。
-- 建议超时：命令执行完成前页面不并发拉取下一条（单飞），因此同一实例同时最多 1 条在途命令。
 
-### 2.2 POST `/ai-control/rpc/result`
+- 暂无命令时请求最多挂起 20 秒，然后返回 `204`；页面收到后立即发起下一次 poll。
+- 同一页面一次只执行一个命令。
 
-- 页面回传执行结果：
-  ```json
-  { "id": "req-xxx", "ok": true, "value": { ... }, "error": "" }
-  ```
-  失败时：`{ "id": "req-xxx", "ok": false, "value": null, "error": "可读错误文本" }`
-- 服务端收到后，把结果交给等待该 `id` 的调用方（2.3 的长轮询请求），并返回 `200 {"ok":true}`。
-- 结果可暂存 30s（防止调用方连接中断后取不到），超出丢弃。
+每次开启按钮必须生成新的 instance ID，并同时写入：
 
-### 2.3 POST `/ai-control/rpc/request`（响应含 `instance` 字段）
+- `window.__superEditorRpcInstance`
+- `<html data-se-rpc-instance="...">`
 
-插件/外部调用方下发命令并**等待结果**（服务端长轮询，最长 90s）：
+这样旧会话的延迟注销不会删除新会话。
+
+### 3.2 页面回传结果
+
+`POST /result`
+
+```json
+{
+  "id": "req-uuid",
+  "instance": "inst-xxx",
+  "ok": true,
+  "value": {},
+  "error": "",
+  "errorCode": ""
+}
+```
+
+- 页面方法只执行一次；网络失败时只重发同一个结果，不重新执行方法。
+- broker 只接受已经派发且 instance 匹配的 ID。
+- 重复或迟到结果返回 `200 {"ok":true,"accepted":false}`，不会影响后续命令。
+
+### 3.3 MCP 下发命令
+
+`POST /request`
 
 ```json
 {
   "method": "addSlide",
   "args": [{ "name": "Module 1 Unit 2 预习" }],
-  "timeoutMs": 60000,
-  "targetInstance": "inst-xxx"   // 可选：多标签页时精确路由；省略时用最近注册的实例
+  "timeoutMs": 90000,
+  "targetInstance": "inst-xxx",
+  "clientId": "mcp-uuid"
 }
 ```
 
 响应：
 
 ```json
-{ "ok": true, "value": { "slideId": 36526 }, "error": "", "instance": "inst-xxx" }
+{
+  "ok": true,
+  "value": { "slideId": 36526 },
+  "error": "",
+  "errorCode": "",
+  "instance": "inst-xxx"
+}
 ```
-```json
-{ "ok": false, "value": null, "error": "template_id 最小不能小于1;", "instance": "inst-xxx" }
+
+`clientId` 和页面租约由插件驱动层维护，网页业务代码不需要处理。
+
+### 3.4 页面发现与租约
+
+- `GET /instances`：返回仍在心跳的页面 ID。
+- `POST /claim`：MCP 进程用 `clientId` 租用页面。
+- `POST /release`：取消当前客户端尚未派发的命令并释放租约；若存在已派发命令，租约延迟到结果返回后释放。
+- 页面心跳 TTL 为 120 秒；客户端租约空闲 TTL 为 30 秒。已派发命令在途时不会被空闲 TTL 抢占。
+- 多个 Codex 任务优先获得不同页面；全部页面占用时返回 `INSTANCE_BUSY`。
+
+### 3.5 注销与健康检查
+
+- `POST /unregister`：`{ "instance": "inst-xxx" }`，用于按钮关闭或页面销毁。
+- `GET /health`：返回严格身份：
+
+  ```json
+  {
+    "ok": true,
+    "service": "super-editor-control-rpc",
+    "protocolVersion": 1,
+    "ownerPid": 1234,
+    "instances": 1,
+    "leases": 0
+  }
+  ```
+
+插件只复用身份与协议版本完全匹配的服务。若 8765 被其他程序占用，会在 MCP 启动超时前明确失败。
+
+## 4. CORS 与 Local Network Access
+
+broker 对正常、错误、204 和 OPTIONS 响应统一返回：
+
+```http
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type
+Access-Control-Allow-Private-Network: true
+Cross-Origin-Resource-Policy: cross-origin
+Cache-Control: no-store
 ```
 
-- `instance` 字段：服务端实际路由到的页面实例 ID；调用方可先发一次不带 `targetInstance` 的 `ping()` 获取，之后固定携带 `targetInstance` 避免多标签页串台。
-- 实例生命周期：以 poll 心跳为准，建议服务端清理 30s 以上无 poll 的实例；`targetInstance` 指定的实例已失活时应立即返回错误（不要挂起等超时）。
+页面 fetch 使用 `mode: 'cors'` 和 `targetAddressSpace: 'loopback'`。轮询超时为 45 秒，以给首次权限
+提示留出时间；失败后指数退避，最大约 5 秒。结果 POST 每次有独立超时并使用相同 ID 重试。
 
-- `timeoutMs` 缺省 60000，上限 120000；超时返回 `{"ok":false,"error":"RPC 超时（...ms）：<method>"}`。
-- 无注册实例时立即返回 `{"ok":false,"error":"暂无已注册的编辑器页面，请先开启顶部 AI 控制"}`。
-- `id` 可选，缺省服务端生成；结果以该 id 关联。
+## 5. 多 MCP 进程和故障接管
 
-### 2.4 GET `/ai-control/rpc/instances`
+- 首个插件 MCP 进程绑定 8765，角色为 owner。
+- 后续进程通过严格 `/health` 探测加入，角色为 follower。
+- follower 每 1.5 秒检查 owner；owner 退出后多个 follower 竞争端口，仅一个成为新 owner。
+- 浏览器长轮询断开后自动退避重连，无需刷新页面或重新点按钮。
 
-- 返回当前注册的实例 ID 列表（调试/多开排查用）：`["inst-xxx", "inst-yyy"]`，最近注册的在前。
+故障时必须区分：
 
-### 2.5 OPTIONS / CORS
+| 状态 | 错误码 | 是否可直接重试 |
+|------|--------|----------------|
+| 命令仍在 broker 队列 | `RPC_TIMEOUT_NOT_DISPATCHED` / `BROKER_SHUTDOWN_NOT_DISPATCHED` | 可以 |
+| 客户端释放且命令未派发 | `CLIENT_RELEASED_NOT_DISPATCHED` | 可以 |
+| 空闲租约过期且命令未派发 | `CLIENT_LEASE_EXPIRED_NOT_DISPATCHED` | 可以 |
+| 命令已经发往页面 | `OUTCOME_UNKNOWN` | 不可以；先读状态 |
+| 页面已失活且命令未派发 | `INSTANCE_STALE` / `INSTANCE_UNREGISTERED` | 重新连接后可以 |
+| 页面被另一任务租用 | `INSTANCE_BUSY` | 等待、切换页面或显式重连 |
 
-- 同源调用无需 CORS；若网关配置了跨域（如插件从其他域名调试），需允许：
-  `Access-Control-Allow-Origin: *`、`Access-Control-Allow-Methods: GET, POST, OPTIONS`、`Access-Control-Allow-Headers: Content-Type`，并应答 OPTIONS 预检 204。
+请求 HTTP 连接在命令未派发时断开，broker 会立即从队列移除命令；如已派发则不强行
+中断页面执行。MCP `notifications/cancelled` 只取消尚未开始的工具调用（返回
+JSON-RPC `-32800`）；已开始的写工具必须完成原有结果边界，避免误报“未执行”导致重复写入。
 
-## 3. 页面实例 ID
+驱动层只会自动重试明确未派发的连接选择，不会自动重放结果未知的写操作。同一 MCP
+进程中的工具调用串行执行，`editor_connect` / `editor_status` 不会与写命令交错释放租约。
 
-- 页面模块加载时生成：`inst-<时间戳36进制>-<随机6位>`，并写入：
-  - `window.__superEditorRpcInstance`
-  - `<html data-se-rpc-instance="...">`（DOM 标记，隔离世界也可读）
-- URL 参数 `__SUPER_EDITOR_RPC_URL`（页面全局变量）可覆盖轮询基地址；生产不建议开放。
+## 6. 开发模式兼容
 
-## 4. 后端实现要点（参考）
+开发时推荐仍使用插件本机 broker，和正式环境保持同一路径。
 
-- 数据结构（单机内存版即可，多实例可用 Redis）：
-  ```
-  queues: Map<instance, Array<{id, method, args}>>
-  results: Map<requestId, {ok, value, error, expireAt}>
-  waiters: Map<requestId, Response>   // 长轮询挂起的调用方
-  instances: Array<string>            // 最近注册在前
-  ```
-- 请求体解析：不依赖框架 bodyParser 也可，手读流后 `JSON.parse`。
-- 命令入队即开始计时，页面 400ms 轮询周期内取走；`/request` 的响应由 `/result` 或超时触发。
-- 网关注意：`/ai-control/rpc/request` 是长连接（最长 120s），需要关闭代理层空闲超时（如 Nginx `proxy_read_timeout 130s`），否则会被网关提前断开。
+仓库 `vue.config.js` 中的同源 dev RPC 可继续作为单独调试兜底；若要使用它，需在应用加载前设置：
 
-## 5. 部署形态建议
+```js
+window.__SUPER_EDITOR_RPC_URL = window.location.origin + '/ai-control'
+```
 
-- **最低成本**：后端主服务里加一个 controller（约 100 行），内存队列即可（单机、有状态可接受，命令在途时间 < 2s）。
-- **网关透传**：若主服务不便改动，可做独立轻服务（同域名下 `/ai-control/*` 反代到它），复用统一鉴权。
-- **页面侧开关**：页面只有在用户点击顶部“AI 控制”且用户/租户允许时启动轮询。
+同源 dev broker 不参与插件 owner/follower、页面租约和故障接管验证，不能代表正式链路。
 
-## 6. 安全（后续 P2 落地，先记录）
+## 7. 当前边界
 
-- 顶部“AI 控制”按钮的可见性/可用性后续应接入后端权限位。
-- `/ai-control/rpc/*` 需与课件接口同一鉴权体系（token/会话），并做频率限制（如每实例 10 req/s）。
-- 建议页面轮询地址由后端动态下发（`/ai-control/config`），避免前端硬编码。
-
-## 7. 本地 dev 参考实现
-
-- 仓库 `vue.config.js` 的 `devServer.before` 已实现上述全部端点（内存版，约 80 行），可直接对照。
-- 页面侧实现：`src/modules/contentEditor/aiControl/index.js`（`startRpcPolling`）。
-- 旧版脚本侧调用：`scripts/mcp-server/driver.js` 的 `connect(httpUrl, pageUrl)` + `bridgeCall(method, args)`；正式插件不再引用。
+本规范优先保证连接稳定性、请求幂等语义和多任务隔离。鉴权、Origin 白名单、端口令牌等安全收口
+暂未纳入本轮实现，发布到不受控环境前应另行设计。

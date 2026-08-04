@@ -1,14 +1,15 @@
 {
   "name": "super-editor-control-mcp",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
-  "description": "Zero-dependency MCP server that drives the Super Media Editor via same-origin RPC and window.__superEditor.",
+  "description": "Zero-dependency stdio MCP server and localhost RPC broker for controlling Super Editor pages in regular browsers.",
   "type": "module",
   "main": "index.js",
   "engines": {
-    "node": ">=22"
+    "node": ">=20"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test"
   }
 }

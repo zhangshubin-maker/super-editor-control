@@ -1,6 +1,6 @@
 ﻿# setup-mcp.ps1
 # 生成 .mcp.json 兜底脚本：探测可用的 Node 运行时（优先 Codex 捆绑的 node），
-# 校验版本 >= 22，生成带绝对路径的 MCP 配置（跨机器、免手动装 Node）。
+# 校验版本 >= 20，生成带绝对路径的 MCP 配置（跨机器、免手动装 Node）。
 # 用法：powershell -ExecutionPolicy Bypass -File scripts/setup-mcp.ps1
 # 可用环境变量 SUPER_EDITOR_NODE 手动指定 node 路径。
 $ErrorActionPreference = 'Stop'
@@ -17,6 +17,9 @@ if (-not (Test-Path -LiteralPath $serverPath)) {
 # 1. 收集候选 node：环境变量 > Codex 捆绑路径 > PATH
 $candidates = @()
 if ($env:SUPER_EDITOR_NODE) { $candidates += $env:SUPER_EDITOR_NODE }
+if ($env:USERPROFILE) {
+  $candidates += (Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe')
+}
 if ($env:LOCALAPPDATA) {
   $candidates += (Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin\node.exe')
   $candidates += (Join-Path $env:LOCALAPPDATA 'Programs\Codex\bin\node.exe')
@@ -24,7 +27,7 @@ if ($env:LOCALAPPDATA) {
 $cmd = Get-Command node -ErrorAction SilentlyContinue
 if ($cmd -and $cmd.Source) { $candidates += $cmd.Source }
 
-# 2. 选第一个存在且主版本 >= 22 的
+# 2. 选第一个存在且主版本 >= 20 的
 $node = $null
 foreach ($cand in $candidates) {
   if (-not (Test-Path -LiteralPath $cand)) { continue }
@@ -35,14 +38,14 @@ foreach ($cand in $candidates) {
   }
   if ($ver -match 'v?(\d+)\.') {
     $major = [int]$Matches[1]
-    if ($major -ge 22) {
+    if ($major -ge 20) {
       $node = $cand
       break
     }
   }
 }
 if (-not $node) {
-  Write-Host '[错误] 未找到 Node >= 22。请先安装 Node.js 22+，或用环境变量 SUPER_EDITOR_NODE 指定路径。' -ForegroundColor Red
+  Write-Host '[错误] 未找到 Node >= 20。请先安装 Node.js 20+，或用环境变量 SUPER_EDITOR_NODE 指定路径。' -ForegroundColor Red
   exit 1
 }
 

@@ -1,13 +1,32 @@
-// 驱动器：通过同源 RPC 通道控制编辑器页面，把 window.__superEditor 桥接 API 封装为可调用函数。
-// 页面带 ai_control=1 打开时，轮询 {origin}/ai-control/rpc（dev server / 后端提供）。
+// 驱动器：通过插件进程内置的 127.0.0.1 RPC 中继控制普通浏览器页面。
 // 设置环境变量 SUPER_EDITOR_MOCK=1 可进入 mock 模式（不连接编辑器，便于测试 MCP 服务本身）。
 
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+import {
+  RPC_ORIGIN,
+  ensureLocalRpcBroker,
+  stopLocalRpcBroker
+} from './rpc-broker.js'
 
 const MOCK = process.env.SUPER_EDITOR_MOCK === '1'
+const RPC_REQUEST_TIMEOUT_MS = 90000
+const DISCOVERY_TIMEOUT_MS = 3000
+const DISCOVERY_RETRY_MS = 100
+const CONTROL_TIMEOUT_MS = 3000
+const CLIENT_ID = 'mcp-' + randomUUID()
+const LEASE_RENEW_INTERVAL_MS = 10000
 
-let active = null // { mode: 'rpc'|'mock', origin, pageUrl }
+let active = null // { mode: 'rpc'|'mock', origin, instanceId, page }
+let connectPromise = null
+
+class RpcBridgeError extends Error {
+  constructor(code, message) {
+    super(message)
+    this.code = code || 'RPC_ERROR'
+  }
+}
 
 const MIME_BY_EXT = {
   '.png': 'image/png',
@@ -49,80 +68,270 @@ export function pageInfo() {
   return {
     connected: true,
     mock: MOCK,
-    mode: active.mode || 'rpc',
-    pageUrl: active.pageUrl || null,
-    origin: active.origin || null,
-    instanceId: active.instanceId || null
+    mode: active.mode || 'local-rpc',
+    rpcOrigin: active.origin || RPC_ORIGIN,
+    instanceId: active.instanceId || null,
+    page: active.page || null
   }
 }
 
-async function resolveRpcOrigin(httpUrl, pageUrl) {
-  let origin = ''
-  if (pageUrl && /^https?:\/\//.test(pageUrl)) {
-    origin = new URL(pageUrl).origin
-  } else if (httpUrl) {
-    origin = httpUrl.replace(/\/+$/, '')
-  } else {
-    throw new Error('需要 pageUrl（课件完整 URL）或 httpUrl（编辑器 origin，如 http://localhost:8090）')
-  }
-  const probe = await fetch(origin + '/ai-control/rpc/instances', {
-    signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(3000) : undefined
+function timeoutSignal(timeoutMs) {
+  return typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+    ? AbortSignal.timeout(timeoutMs)
+    : undefined
+}
+
+export async function initialize() {
+  if (MOCK) return { origin: 'mock://super-editor', role: 'mock' }
+  return ensureLocalRpcBroker()
+}
+
+async function fetchInstances({ waitForPage = false } = {}) {
+  const deadline = Date.now() + (waitForPage ? DISCOVERY_TIMEOUT_MS : 0)
+  do {
+    let broker = await ensureLocalRpcBroker()
+    let response = await fetch(broker.rpcBaseUrl + '/instances', {
+      signal: timeoutSignal(DISCOVERY_TIMEOUT_MS)
+    }).catch(() => null)
+    if (!response || !response.ok) {
+      broker = await ensureLocalRpcBroker({ forceProbe: true })
+      response = await fetch(broker.rpcBaseUrl + '/instances', {
+        signal: timeoutSignal(DISCOVERY_TIMEOUT_MS)
+      }).catch(() => null)
+      if (!response || !response.ok) {
+        throw new RpcBridgeError('BROKER_UNAVAILABLE', '插件本地 RPC 中继不可达：' + RPC_ORIGIN)
+      }
+    }
+    const instances = await response.json()
+    if (Array.isArray(instances) && instances.length) return { broker, instances }
+    if (!waitForPage || Date.now() >= deadline) {
+      return { broker, instances: Array.isArray(instances) ? instances : [] }
+    }
+    await new Promise((resolve) => setTimeout(resolve, DISCOVERY_RETRY_MS))
+  } while (Date.now() <= deadline)
+  return { broker: await ensureLocalRpcBroker(), instances: [] }
+}
+
+async function postBrokerControl(pathname, body, retryAfterRecovery = true) {
+  let broker = await ensureLocalRpcBroker()
+  let response = await fetch(broker.rpcBaseUrl + pathname, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: timeoutSignal(CONTROL_TIMEOUT_MS)
   }).catch(() => null)
-  if (!probe || !probe.ok) {
-    throw new Error(
-      'RPC 端点不可达：' + origin + '/ai-control/rpc（请确认编辑器已带 ai_control=1 打开，且 dev server / 后端已挂载 /ai-control/rpc 路由）'
+  if ((!response || !response.ok) && retryAfterRecovery) {
+    broker = await ensureLocalRpcBroker({ forceProbe: true })
+    response = await fetch(broker.rpcBaseUrl + pathname, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: timeoutSignal(CONTROL_TIMEOUT_MS)
+    }).catch(() => null)
+  }
+  if (!response || !response.ok) {
+    throw new RpcBridgeError(
+      'BROKER_UNAVAILABLE',
+      '插件本地 RPC 中继不可达：' + RPC_ORIGIN
     )
   }
-  return origin
+  return response.json()
 }
 
-export async function connect(httpUrl, pageUrl) {
-  if (MOCK) {
-    active = { mode: 'mock', origin: 'mock://super-editor', pageUrl: pageUrl || 'mock://super-editor' }
-    return { pageUrl: active.pageUrl, title: 'MOCK', mode: 'mock' }
-  }
-  const origin = await resolveRpcOrigin(httpUrl, pageUrl)
-  await closeActive()
-  active = { mode: 'rpc', origin, pageUrl: pageUrl || origin }
-  // 探测页面实例：不带 targetInstance 路由到最近活跃实例，之后所有调用固定到该实例
-  let probe
+async function claimInstance(preferredInstance) {
+  return postBrokerControl('/claim', {
+    clientId: CLIENT_ID,
+    preferredInstance: preferredInstance || undefined
+  })
+}
+
+async function releaseInstance(instanceId) {
+  if (MOCK) return
+  await postBrokerControl(
+    '/release',
+    { clientId: CLIENT_ID, instance: instanceId || undefined },
+    false
+  ).catch(() => {})
+}
+
+async function rpcRequest(method, args, targetInstance) {
+  const broker = await ensureLocalRpcBroker()
+  let response
+  const leaseTimer = setInterval(() => {
+    claimInstance(targetInstance).catch(() => {})
+  }, LEASE_RENEW_INTERVAL_MS)
+  leaseTimer.unref()
   try {
-    probe = await rpcBridgeCall('ping')
-  } catch (err) {
-    await closeActive()
-    throw new Error('未发现活跃的编辑器页面实例：' + err.message + '（请确认页面已带 ai_control=1 打开并完成加载）')
+    response = await fetch(broker.rpcBaseUrl + '/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method,
+        args: Array.isArray(args) ? args : [],
+        timeoutMs: RPC_REQUEST_TIMEOUT_MS,
+        targetInstance: targetInstance || undefined,
+        clientId: CLIENT_ID
+      }),
+      signal: timeoutSignal(RPC_REQUEST_TIMEOUT_MS + CONTROL_TIMEOUT_MS)
+    })
+  } catch (error) {
+    active = null
+    await ensureLocalRpcBroker({ forceProbe: true }).catch(() => {})
+    throw new RpcBridgeError(
+      'OUTCOME_UNKNOWN',
+      '本地 RPC 中继连接中断，已尝试恢复。为避免重复写入，本次操作没有自动重放，请先读取页面状态后重试：' +
+        error.message
+    )
+  } finally {
+    clearInterval(leaseTimer)
   }
-  active.instanceId = (probe && probe.instanceId) || null
-  return { pageUrl: active.pageUrl, title: 'RPC', mode: 'rpc', origin, instanceId: active.instanceId }
+  if (!response.ok) {
+    throw new RpcBridgeError(
+      'RPC_HTTP_ERROR',
+      '本地 RPC 请求失败：HTTP ' + response.status + ' ' + response.statusText
+    )
+  }
+  let result
+  try {
+    result = await response.json()
+  } catch (error) {
+    active = null
+    await ensureLocalRpcBroker({ forceProbe: true }).catch(() => {})
+    throw new RpcBridgeError(
+      'OUTCOME_UNKNOWN',
+      '本地 RPC 响应在读取时中断。为避免重复写入，本次操作没有自动重放，请先读取页面状态后重试：' +
+        error.message
+    )
+  }
+  if (!result.ok) {
+    throw new RpcBridgeError(result.errorCode, result.error || 'RPC 调用 ' + method + ' 失败')
+  }
+  return result.value
+}
+
+async function ensureConnected() {
+  if (active && active.instanceId) return active
+  if (connectPromise) return connectPromise
+  connectPromise = (async () => {
+    const deadline = Date.now() + DISCOVERY_TIMEOUT_MS
+    let claimed
+    do {
+      claimed = await claimInstance()
+      if (claimed.ok) break
+      if (claimed.errorCode !== 'NO_INSTANCES') {
+        throw new RpcBridgeError(claimed.errorCode, claimed.error)
+      }
+      await new Promise((resolve) => setTimeout(resolve, DISCOVERY_RETRY_MS))
+    } while (Date.now() < deadline)
+    if (!claimed || !claimed.ok) {
+      throw new RpcBridgeError(
+        claimed && claimed.errorCode,
+        (claimed && claimed.error) ||
+          '暂无可控制的编辑器页面，请在浏览器中打开课件并点击顶部“AI 控制”开关'
+      )
+    }
+    const instanceId = claimed.instance
+    try {
+      const page = await rpcRequest('ping', [], instanceId)
+      active = { mode: 'local-rpc', origin: RPC_ORIGIN, instanceId, page }
+      return active
+    } catch (error) {
+      await releaseInstance(instanceId)
+      throw error
+    }
+  })()
+  try {
+    return await connectPromise
+  } finally {
+    connectPromise = null
+  }
+}
+
+export async function connect() {
+  if (MOCK) {
+    active = { mode: 'mock', origin: 'mock://super-editor', page: mockResult('ping') }
+    return pageInfo()
+  }
+  await closeActive()
+  await ensureConnected()
+  return pageInfo()
 }
 
 export async function closeActive() {
+  const instanceId = active && active.instanceId
   active = null
+  await releaseInstance(instanceId)
 }
 
-async function rpcBridgeCall(method, args) {
-  const resp = await fetch(active.origin + '/ai-control/rpc/request', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ method, args: args || [], timeoutMs: 90000, targetInstance: active.instanceId || undefined })
-  })
-  if (!resp.ok) {
-    throw new Error('RPC 请求失败：HTTP ' + resp.status + ' ' + resp.statusText)
+export async function getStatus() {
+  if (MOCK) {
+    if (!active) await connect()
+    return Object.assign(pageInfo(), { bridgeReady: true, brokerRole: 'mock' })
   }
-  const out = await resp.json()
-  if (!out.ok) throw new Error(out.error || ('RPC 调用 ' + method + ' 失败'))
-  return out.value
+  try {
+    const { broker, instances } = await fetchInstances()
+    if (active && !instances.includes(active.instanceId)) await closeActive()
+    if (!instances.length) {
+      return {
+        connected: false,
+        bridgeReady: false,
+        mode: 'local-rpc',
+        rpcOrigin: RPC_ORIGIN,
+        brokerRole: broker.role,
+        instanceId: null,
+        instances,
+        bridgeError: '尚未发现已开启 AI 控制的浏览器页面'
+      }
+    }
+    if (!active) {
+      return {
+        connected: false,
+        bridgeReady: true,
+        available: true,
+        mode: 'local-rpc',
+        rpcOrigin: RPC_ORIGIN,
+        brokerRole: broker.role,
+        instanceId: null,
+        instances
+      }
+    }
+    const connection = active
+    const page = await rpcRequest('ping', [], connection.instanceId)
+    connection.page = page
+    return Object.assign(pageInfo(), {
+      bridgeReady: true,
+      brokerRole: broker.role,
+      instances
+    })
+  } catch (error) {
+    await closeActive()
+    return {
+      connected: false,
+      bridgeReady: false,
+      mode: 'local-rpc',
+      rpcOrigin: RPC_ORIGIN,
+      instanceId: null,
+      instances: [],
+      bridgeError: error.message
+    }
+  }
 }
 
 export async function bridgeCall(method, args = []) {
   if (MOCK) return mockResult(method, args)
-  if (!active) throw new Error('尚未连接编辑器页面：请先调用 editor_connect')
-  return rpcBridgeCall(method, args)
+  const connection = await ensureConnected()
+  try {
+    return await rpcRequest(method, args, connection.instanceId)
+  } catch (error) {
+    if (error.code !== 'INSTANCE_STALE') throw error
+    await closeActive()
+    const nextConnection = await ensureConnected()
+    return rpcRequest(method, args, nextConnection.instanceId)
+  }
 }
 
 export async function captureScreenshot(opts = {}) {
   if (MOCK) return TINY_PNG_DATA_URL
-  if (!active) throw new Error('尚未连接编辑器页面：请先调用 editor_connect')
   const data = await bridgeCall('screenshot', [opts])
   if (typeof data === 'string' && data.startsWith('data:image')) return data
   throw new Error('桥接 screenshot 不可用（fullPage 拼接失败或浏览器不支持 html-to-image）')
@@ -141,6 +350,11 @@ export async function addImageElement(args = {}) {
 export async function setImageElementSrc(args = {}) {
   const a = await resolveImageInput(args)
   return bridgeCall('setImageElementSrc', [a])
+}
+
+export async function shutdown() {
+  await closeActive()
+  await stopLocalRpcBroker()
 }
 
 const TINY_PNG_DATA_URL =
@@ -203,13 +417,13 @@ function mockResult(method, args = []) {
             smart_book_type: arg.smartBookType || 3
           }
         },
-        editorUrl: `https://mock.example.com/content-editor?book_id=${bookId}&ai_control=1`
+        editorUrl: `https://mock.example.com/content-editor?book_id=${bookId}`
       }
     }
     case 'jumpToBook':
       return {
         bookId: arg.bookId,
-        url: `https://mock.example.com/content-editor?book_id=${arg.bookId}&ai_control=1`,
+        url: `https://mock.example.com/content-editor?book_id=${arg.bookId}`,
         target: arg.target || 'url',
         scheduled: arg.target === 'current',
         opened: arg.target === 'new'
