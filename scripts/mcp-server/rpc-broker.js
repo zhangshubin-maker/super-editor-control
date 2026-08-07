@@ -37,6 +37,7 @@ function createRpcBrokerServer(options = {}) {
   const leases = new Map()
   const instances = []
   const lastPollAt = new Map()
+  const instanceWindowIds = new Map()
 
   let cleanupTimer = null
   let server = null
@@ -104,11 +105,12 @@ function createRpcBrokerServer(options = {}) {
     return prefix + randomUUID()
   }
 
-  function touchInstance(instance) {
+  function touchInstance(instance, windowId) {
     if (!queues.has(instance)) {
       queues.set(instance, [])
       instances.unshift(instance)
     }
+    if (windowId) instanceWindowIds.set(instance, windowId)
     lastPollAt.set(instance, Date.now())
   }
 
@@ -197,6 +199,7 @@ function createRpcBrokerServer(options = {}) {
     closePollWaiter(instance)
     queues.delete(instance)
     lastPollAt.delete(instance)
+    instanceWindowIds.delete(instance)
     leases.delete(instance)
     const index = instances.indexOf(instance)
     if (index >= 0) instances.splice(index, 1)
@@ -241,7 +244,7 @@ function createRpcBrokerServer(options = {}) {
     })
   }
 
-  function claimInstance(clientId, preferredInstance) {
+  function claimInstance(clientId, preferredInstance, preferredWindowId) {
     pruneExpired()
     const canClaim = (instance) => {
       const lease = leases.get(instance)
@@ -249,11 +252,48 @@ function createRpcBrokerServer(options = {}) {
     }
     let instance = null
     if (preferredInstance) {
-      instance = canClaim(preferredInstance) ? preferredInstance : null
-    } else {
-      instance = instances.find((id) => canClaim(id)) || null
+      const instanceWindowId = instanceWindowIds.get(preferredInstance) || ''
+      if (
+        queues.has(preferredInstance) &&
+        (!preferredWindowId || instanceWindowId === preferredWindowId)
+      ) {
+        if (!canClaim(preferredInstance)) {
+          return { instance: null, windowId: instanceWindowId, errorCode: 'INSTANCE_BUSY' }
+        }
+        instance = preferredInstance
+      }
     }
-    if (!instance) return null
+    if (!instance && preferredWindowId) {
+      const matches = instances.filter(
+        (id) => queues.has(id) && instanceWindowIds.get(id) === preferredWindowId
+      )
+      if (matches.length > 1) {
+        return { instance: null, windowId: preferredWindowId, errorCode: 'WINDOW_AMBIGUOUS' }
+      }
+      if (!matches.length) {
+        return { instance: null, windowId: preferredWindowId, errorCode: 'WINDOW_NOT_FOUND' }
+      }
+      if (!canClaim(matches[0])) {
+        return { instance: null, windowId: preferredWindowId, errorCode: 'INSTANCE_BUSY' }
+      }
+      instance = matches[0]
+    } else {
+      if (!instance && !preferredInstance) {
+        instance = instances.find((id) => canClaim(id)) || null
+      }
+    }
+    if (!instance) {
+      const hasRegisteredInstances = instances.some((id) => queues.has(id))
+      return {
+        instance: null,
+        windowId: preferredWindowId || '',
+        errorCode: preferredInstance
+          ? 'INSTANCE_STALE'
+          : hasRegisteredInstances
+            ? 'INSTANCE_BUSY'
+            : 'NO_INSTANCES'
+      }
+    }
     const currentLease = leases.get(instance)
     leases.set(instance, {
       clientId,
@@ -264,17 +304,18 @@ function createRpcBrokerServer(options = {}) {
         currentLease.releaseRequested
       )
     })
-    return instance
+    return { instance, windowId: instanceWindowIds.get(instance) || '', errorCode: '' }
   }
 
   async function handlePoll(url, res) {
     const instance = String(url.searchParams.get('instance') || '')
+    const windowId = String(url.searchParams.get('windowId') || '')
     if (!instance) {
       sendJson(res, 400, { ok: false, error: '缺少 instance 参数' })
       return
     }
     pruneExpired()
-    touchInstance(instance)
+    touchInstance(instance, windowId)
     const queue = queues.get(instance)
     if (queue && queue.length > 0) {
       dispatchCommand(instance, res, queue.shift())
@@ -349,39 +390,33 @@ function createRpcBrokerServer(options = {}) {
     }
     pruneExpired()
     const preferredInstance = String(body.preferredInstance || '')
-    if (preferredInstance && !queues.has(preferredInstance)) {
-      sendJson(res, 200, {
-        ok: false,
-        instance: null,
-        error: '目标页面实例已失活或未注册：' + preferredInstance,
-        errorCode: 'INSTANCE_STALE'
-      })
-      return
-    }
-    const preferredLease = preferredInstance && leases.get(preferredInstance)
-    if (preferredLease && preferredLease.clientId !== clientId) {
-      sendJson(res, 200, {
-        ok: false,
-        instance: null,
-        error: '目标页面正由另一个 Codex 任务使用',
-        errorCode: 'INSTANCE_BUSY'
-      })
-      return
-    }
-    const instance = claimInstance(clientId, preferredInstance)
-    if (!instance) {
+    const preferredWindowId = String(body.preferredWindowId || '')
+    const claim = claimInstance(clientId, preferredInstance, preferredWindowId)
+    if (!claim.instance) {
       const hasInstances = instances.some((id) => queues.has(id))
-      sendJson(res, 200, {
+      const errorMap = {
+        INSTANCE_STALE: '目标页面实例已失活或未注册：' + preferredInstance,
+        WINDOW_NOT_FOUND: '目标浏览器窗口尚未重新注册：' + preferredWindowId,
+        WINDOW_AMBIGUOUS: '发现多个相同窗口身份的页面，为避免控制串页已停止自动认领：' + preferredWindowId,
+        INSTANCE_BUSY: '目标页面正由另一个 Codex 任务使用'
+      }
+      const responseBody = {
         ok: false,
         instance: null,
-        error: hasInstances
-          ? '已开启 AI 控制的页面正由另一个 Codex 任务使用'
-          : '暂无已注册的编辑器页面，请在浏览器中打开课件并开启顶部“AI 控制”',
-        errorCode: hasInstances ? 'INSTANCE_BUSY' : 'NO_INSTANCES'
-      })
+        error:
+          errorMap[claim.errorCode] ||
+          (hasInstances
+            ? '已开启 AI 控制的页面正由另一个 Codex 任务使用'
+            : '暂无已注册的编辑器页面，请在浏览器中打开课件并开启顶部“AI 控制”'),
+        errorCode: claim.errorCode || (hasInstances ? 'INSTANCE_BUSY' : 'NO_INSTANCES')
+      }
+      if (claim.windowId) responseBody.windowId = claim.windowId
+      sendJson(res, 200, responseBody)
       return
     }
-    sendJson(res, 200, { ok: true, instance })
+    const responseBody = { ok: true, instance: claim.instance }
+    if (claim.windowId) responseBody.windowId = claim.windowId
+    sendJson(res, 200, responseBody)
   }
 
   async function handleRelease(req, res) {
@@ -438,7 +473,7 @@ function createRpcBrokerServer(options = {}) {
       }
       instance = queues.has(body.targetInstance) ? body.targetInstance : null
     } else {
-      instance = claimInstance(clientId)
+      instance = claimInstance(clientId).instance
     }
     if (!instance) {
       const error = body.targetInstance
@@ -653,6 +688,7 @@ function createRpcBrokerServer(options = {}) {
     queues.clear()
     instances.splice(0)
     lastPollAt.clear()
+    instanceWindowIds.clear()
     if (!server) return
     const currentServer = server
     server = null

@@ -64,7 +64,7 @@ await b.batch({ steps: [
 1. 在普通 Chrome / Edge 中打开目标课件；不需要 Electron 或调试模式。
 2. 请用户点击编辑器顶部“AI 控制”开关；DOM 标记 `data-super-editor-bridge="1"` 表示桥接已挂载。首次出现本地网络权限提示时选择允许。
 3. 可调用 `editor_status` 检查，或直接调用任务所需的 `editor_*` 工具；首次调用会自动连接，不要求先执行 `editor_connect`。
-4. 多标签页/多窗口时每个 Codex 任务租用一个页面；需要切换时先在目标页面关闭再开启按钮，然后调用 `editor_connect()` 重新选择。
+4. 多标签页/多窗口时每个 Codex 任务租用一个页面并固定其 `windowId`；刷新和当前窗口切书会自动等待同一窗口重新注册，绝不回退认领其他书本页面。只有主动切换目标窗口时才调用 `editor_connect()` 重新选择。
 5. 所有画布写操作必须通过 MCP/桥接方法完成，禁止用鼠标键盘模拟。浏览器技能仅用于只读探测或辅助打开页面。
 
 ## 3. 标准工作流
@@ -93,7 +93,7 @@ await b.batch({ steps: [
 | MCP 无法连接 | 更新/安装插件后新开 Codex 任务；检查 `http://127.0.0.1:8765/ai-control/rpc/health`，并确认 8765 未被其他程序占用 |
 | 页面一直 waiting | 允许浏览器本地网络访问；正式站点 CSP 的 `connect-src` 加入 `http://127.0.0.1:8765` |
 | OUTCOME_UNKNOWN | 命令可能已经执行，禁止直接重放写操作；先读取页面/元素状态再决定 |
-| RPC 调用超时 | 调用 `editor_status` 检查实例；确认目标页面没有关闭/刷新，必要时重新开启顶部按钮并 `editor_connect()` |
+| RPC 调用超时 | 调用 `editor_status` 检查实例和 `windowId`；刷新后最多等待 30 秒自动恢复同一窗口。只有确认要主动换窗口时才重新开启目标页按钮并调用 `editor_connect()` |
 | `getSlide` 报 int 反序列化错误 | id 参数传了对象 → 改传标量 |
 | 截图缺内容 | 画布虚拟滚动 → 先用 `scrollToBlock` / `scrollToElement` 滚动到位再截图 |
 | 保存后看不到 | 刷新页面后重新 `getSlide`；确认 `save()` 返回成功 |

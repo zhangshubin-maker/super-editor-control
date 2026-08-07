@@ -59,7 +59,7 @@
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
-| `ping()` | 无 | `{ version, editorType, bookId, mode }` |
+| `ping()` | 无 | `{ version, editorType, bookId, mode, instanceId, windowId }` |
 | `getState()` | 无 | 见上 |
 | `listSlides()` | 无 | `[{ id, name, pageId }]` |
 | `getUserInfo(payload?)` | `{ refresh? }` | 当前登录用户信息；优先读 Vuex，缺失或 refresh 时请求账号接口 |
@@ -299,7 +299,7 @@
 |------|------|------|
 | `exportSlide(slideId?)` | string（省略=当前页） | `{ slideId, blocks }`（整页完整数据，可用于备份/跨页复用） |
 | `replaceSlideContent(slideId, blocks)` | `(string, 模板数组)` | `{ slideId, blockIds }`（清空目标页后重建；传空数组=清空页面） |
-| `getBridgeInfo()` | 无 | `{ version, instanceId, bookId, methods }`（methods 为全部可用方法名） |
+| `getBridgeInfo()` | 无 | `{ version, instanceId, windowId, bookId, methods }`（methods 为全部可用方法名） |
 | `batch(payload)` | `{ steps: [{ method, args }], stopOnError? }` | `{ results: [{ index, method, ok, value/error }], stopped, stoppedAt }`（一次往返串行执行多步，见下） |
 | `screenshot(payload)` | `{ fullPage?, blockId? }` | `data:image/png;base64,...`（默认当前视口；`fullPage: true` 全部区块拼接整页；`blockId` 指定单区块） |
 
@@ -324,8 +324,9 @@
 编辑器侧（`src/modules/contentEditor/aiControl/index.js`）在挂载桥接时同时启动两类通道：
 
 ### 方式 A：插件本机 HTTP RPC（推荐，生产/开发通用）
-- 桥接默认长轮询 `http://127.0.0.1:8765/ai-control/rpc/poll?instance=<页面实例ID>`；`window.__SUPER_EDITOR_RPC_URL` 仅用于开发时覆盖基地址；
+- 桥接默认长轮询 `http://127.0.0.1:8765/ai-control/rpc/poll?instance=<页面实例ID>&windowId=<浏览器窗口ID>`；`instance` 每次加载变化，`windowId` 在同一窗口刷新/导航时保持、新窗口独立生成；`window.__SUPER_EDITOR_RPC_URL` 仅用于开发时覆盖基地址；
 - broker 由插件 MCP 进程提供，正式后端和 Electron 都不需要部署 RPC；多个 MCP 进程自动选主和故障接管；
+- 插件首次连接后固定 `windowId`；实例失活时只等待同一窗口的新实例，禁止把其他书本窗口作为自动重连回退。
 - 每次开启按钮生成新的 instance ID。poll 有命令时返回 `{ id, method, args }`，无命令最长等待 20 秒后返回 204；
 - 桥接只执行一次 `window.__superEditor[method](...args)`，随后 POST `{ id, instance, ok, value, error, errorCode? }`；结果传输失败只重发同一结果；
 - MCP 驱动使用 `clientId` 租用页面并固定 `targetInstance`，多任务不会串台；页面心跳 TTL 120 秒，空闲租约 TTL 30 秒；

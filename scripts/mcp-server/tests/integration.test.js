@@ -159,13 +159,18 @@ async function waitForInstance(port, instance) {
   })
 }
 
-async function runBrowserPage(port, instance, signal) {
+async function runBrowserPage(port, instance, signal, options = {}) {
   const baseUrl = `http://127.0.0.1:${port}/ai-control/rpc`
+  const windowId = options.windowId || ''
+  const bookId = options.bookId || 'book-browser'
+  const currentSlideId = options.bookId ? 'slide-' + bookId : 'slide-browser'
   while (!signal.aborted) {
     try {
-      const response = await fetch(baseUrl + '/poll?instance=' + encodeURIComponent(instance), {
-        signal
-      })
+      const query =
+        '?instance=' +
+        encodeURIComponent(instance) +
+        (windowId ? '&windowId=' + encodeURIComponent(windowId) : '')
+      const response = await fetch(baseUrl + '/poll' + query, { signal })
       if (response.status === 204) continue
       if (!response.ok) throw new Error('poll HTTP ' + response.status)
       const command = await response.json()
@@ -174,11 +179,12 @@ async function runBrowserPage(port, instance, signal) {
         value = {
           version: '1.2.0',
           editorType: 'content-editor',
-          bookId: 'book-browser',
-          instanceId: instance
+          bookId,
+          instanceId: instance,
+          windowId: windowId || null
         }
       } else if (command.method === 'getState') {
-        value = { bookInfo: { id: 'book-browser' }, currentSlideId: 'slide-browser' }
+        value = { bookInfo: { id: bookId }, currentSlideId }
       } else {
         value = { method: command.method }
       }
@@ -193,6 +199,68 @@ async function runBrowserPage(port, instance, signal) {
     }
   }
 }
+
+test('MCP 刷新重连保持原窗口绑定，不会认领其他书本页面', { timeout: 20000 }, async () => {
+  const port = await getFreePort()
+  const client = createMcpClient(port)
+  const otherController = new AbortController()
+  const targetController = new AbortController()
+  let refreshedController = null
+  const otherPage = runBrowserPage(port, 'page-other-book', otherController.signal, {
+    windowId: 'window-other',
+    bookId: 'book-other'
+  })
+  let targetPage = null
+  let refreshedPage = null
+
+  try {
+    await initialize(client)
+    await waitForInstance(port, 'page-other-book')
+    targetPage = runBrowserPage(port, 'page-target-old', targetController.signal, {
+      windowId: 'window-target',
+      bookId: 'book-target-old'
+    })
+    await waitForInstance(port, 'page-target-old')
+
+    const connected = readToolResult(
+      await client.call('tools/call', { name: 'editor_connect', arguments: {} })
+    )
+    assert.equal(connected.isError, false)
+    assert.equal(connected.data.windowId, 'window-target')
+
+    targetController.abort()
+    await targetPage
+    await fetch(`http://127.0.0.1:${port}/ai-control/rpc/unregister`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instance: 'page-target-old' })
+    })
+
+    const statePromise = client.call(
+      'tools/call',
+      { name: 'editor_get_state', arguments: {} },
+      15000
+    )
+    await wait(250)
+    refreshedController = new AbortController()
+    refreshedPage = runBrowserPage(port, 'page-target-new', refreshedController.signal, {
+      windowId: 'window-target',
+      bookId: 'book-target-new'
+    })
+    await waitForInstance(port, 'page-target-new')
+
+    const state = readToolResult(await statePromise)
+    assert.equal(state.isError, false)
+    assert.equal(state.data.bookInfo.id, 'book-target-new')
+    assert.notEqual(state.data.bookInfo.id, 'book-other')
+  } finally {
+    otherController.abort()
+    if (!targetController.signal.aborted) targetController.abort()
+    if (refreshedController) refreshedController.abort()
+    await Promise.all([otherPage, targetPage, refreshedPage].filter(Boolean))
+    await client.close()
+  }
+})
 
 async function readJsonBody(req) {
   const chunks = []

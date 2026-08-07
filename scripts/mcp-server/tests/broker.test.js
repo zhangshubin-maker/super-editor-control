@@ -535,3 +535,60 @@ test('多个 Codex 客户端会租用不同页面且第三个客户端收到忙�
     await broker.stop()
   }
 })
+
+test('刷新重连只认领原窗口，其他书本窗口不会成为回退目标', async () => {
+  const { broker, baseUrl } = await createBroker()
+  const controllers = []
+  const registrations = []
+  const register = (instance, windowId) => {
+    const controller = new AbortController()
+    controllers.push(controller)
+    const query =
+      '?instance=' + encodeURIComponent(instance) + '&windowId=' + encodeURIComponent(windowId)
+    registrations.push(
+      fetch(baseUrl + '/poll' + query, { signal: controller.signal }).catch(() => null)
+    )
+  }
+  try {
+    register('page-other', 'window-other')
+    register('page-target-old', 'window-target')
+    await waitForInstance(baseUrl, 'page-other')
+    await waitForInstance(baseUrl, 'page-target-old')
+
+    const initial = await postJson(baseUrl, '/claim', {
+      clientId: 'client-window-pinned',
+      preferredInstance: 'page-target-old'
+    })
+    assert.equal(initial.body.instance, 'page-target-old')
+    assert.equal(initial.body.windowId, 'window-target')
+
+    await postJson(baseUrl, '/unregister', { instance: 'page-target-old' })
+    const whileRefreshing = await postJson(baseUrl, '/claim', {
+      clientId: 'client-window-pinned',
+      preferredWindowId: 'window-target'
+    })
+    assert.equal(whileRefreshing.body.errorCode, 'WINDOW_NOT_FOUND')
+    assert.notEqual(whileRefreshing.body.instance, 'page-other')
+
+    register('page-target-new', 'window-target')
+    await waitForInstance(baseUrl, 'page-target-new')
+    const reconnected = await postJson(baseUrl, '/claim', {
+      clientId: 'client-window-pinned',
+      preferredWindowId: 'window-target'
+    })
+    assert.equal(reconnected.body.instance, 'page-target-new')
+    assert.equal(reconnected.body.windowId, 'window-target')
+
+    register('page-target-duplicate', 'window-target')
+    await waitForInstance(baseUrl, 'page-target-duplicate')
+    const ambiguous = await postJson(baseUrl, '/claim', {
+      clientId: 'client-window-pinned',
+      preferredWindowId: 'window-target'
+    })
+    assert.equal(ambiguous.body.errorCode, 'WINDOW_AMBIGUOUS')
+  } finally {
+    controllers.forEach((controller) => controller.abort())
+    await Promise.all(registrations)
+    await broker.stop()
+  }
+})

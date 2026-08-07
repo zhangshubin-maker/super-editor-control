@@ -13,6 +13,7 @@ import {
 const MOCK = process.env.SUPER_EDITOR_MOCK === '1'
 const RPC_REQUEST_TIMEOUT_MS = 90000
 const DISCOVERY_TIMEOUT_MS = 3000
+const RECONNECT_DISCOVERY_TIMEOUT_MS = 30000
 const DISCOVERY_RETRY_MS = 100
 const CONTROL_TIMEOUT_MS = 3000
 const CLIENT_ID = 'mcp-' + randomUUID()
@@ -20,6 +21,7 @@ const LEASE_RENEW_INTERVAL_MS = 10000
 
 let active = null // { mode: 'rpc'|'mock', origin, instanceId, page }
 let connectPromise = null
+let pinnedWindowId = null
 
 class RpcBridgeError extends Error {
   constructor(code, message) {
@@ -71,6 +73,7 @@ export function pageInfo() {
     mode: active.mode || 'local-rpc',
     rpcOrigin: active.origin || RPC_ORIGIN,
     instanceId: active.instanceId || null,
+    windowId: active.windowId || pinnedWindowId || null,
     page: active.page || null
   }
 }
@@ -138,10 +141,11 @@ async function postBrokerControl(pathname, body, retryAfterRecovery = true) {
   return response.json()
 }
 
-async function claimInstance(preferredInstance) {
+async function claimInstance(preferredInstance, preferredWindowId) {
   return postBrokerControl('/claim', {
     clientId: CLIENT_ID,
-    preferredInstance: preferredInstance || undefined
+    preferredInstance: preferredInstance || undefined,
+    preferredWindowId: preferredWindowId || undefined
   })
 }
 
@@ -158,7 +162,7 @@ async function rpcRequest(method, args, targetInstance) {
   const broker = await ensureLocalRpcBroker()
   let response
   const leaseTimer = setInterval(() => {
-    claimInstance(targetInstance).catch(() => {})
+    claimInstance(targetInstance, pinnedWindowId).catch(() => {})
   }, LEASE_RENEW_INTERVAL_MS)
   leaseTimer.unref()
   try {
@@ -209,16 +213,27 @@ async function rpcRequest(method, args, targetInstance) {
   return result.value
 }
 
-async function ensureConnected() {
+async function ensureConnected(options = {}) {
   if (active && active.instanceId) return active
   if (connectPromise) return connectPromise
   connectPromise = (async () => {
-    const deadline = Date.now() + DISCOVERY_TIMEOUT_MS
+    const preferredWindowId =
+      options.windowId === undefined ? pinnedWindowId : options.windowId
+    const timeoutMs =
+      options.timeoutMs === undefined
+        ? preferredWindowId
+          ? RECONNECT_DISCOVERY_TIMEOUT_MS
+          : DISCOVERY_TIMEOUT_MS
+        : options.timeoutMs
+    const deadline = Date.now() + timeoutMs
     let claimed
     do {
-      claimed = await claimInstance()
+      claimed = await claimInstance(null, preferredWindowId)
       if (claimed.ok) break
-      if (claimed.errorCode !== 'NO_INSTANCES') {
+      const waitingForTargetWindow =
+        preferredWindowId &&
+        ['NO_INSTANCES', 'WINDOW_NOT_FOUND', 'INSTANCE_STALE'].includes(claimed.errorCode)
+      if (claimed.errorCode !== 'NO_INSTANCES' && !waitingForTargetWindow) {
         throw new RpcBridgeError(claimed.errorCode, claimed.error)
       }
       await new Promise((resolve) => setTimeout(resolve, DISCOVERY_RETRY_MS))
@@ -233,7 +248,9 @@ async function ensureConnected() {
     const instanceId = claimed.instance
     try {
       const page = await rpcRequest('ping', [], instanceId)
-      active = { mode: 'local-rpc', origin: RPC_ORIGIN, instanceId, page }
+      const windowId = claimed.windowId || (page && page.windowId) || preferredWindowId || null
+      pinnedWindowId = windowId
+      active = { mode: 'local-rpc', origin: RPC_ORIGIN, instanceId, windowId, page }
       return active
     } catch (error) {
       await releaseInstance(instanceId)
@@ -252,14 +269,15 @@ export async function connect() {
     active = { mode: 'mock', origin: 'mock://super-editor', page: mockResult('ping') }
     return pageInfo()
   }
-  await closeActive()
-  await ensureConnected()
+  await closeActive({ clearPinnedWindow: true })
+  await ensureConnected({ windowId: null, timeoutMs: DISCOVERY_TIMEOUT_MS })
   return pageInfo()
 }
 
-export async function closeActive() {
+export async function closeActive({ clearPinnedWindow = false } = {}) {
   const instanceId = active && active.instanceId
   active = null
+  if (clearPinnedWindow) pinnedWindowId = null
   await releaseInstance(instanceId)
 }
 
@@ -269,8 +287,24 @@ export async function getStatus() {
     return Object.assign(pageInfo(), { bridgeReady: true, brokerRole: 'mock' })
   }
   try {
-    const { broker, instances } = await fetchInstances()
+    const result = await fetchInstances()
+    const broker = result.broker
+    let instances = result.instances
+    let reconnectError = null
     if (active && !instances.includes(active.instanceId)) await closeActive()
+    if (!active && pinnedWindowId) {
+      try {
+        await ensureConnected({ timeoutMs: DISCOVERY_TIMEOUT_MS })
+      } catch (error) {
+        if (!['NO_INSTANCES', 'WINDOW_NOT_FOUND', 'INSTANCE_STALE'].includes(error.code)) {
+          throw error
+        }
+        reconnectError = error
+      }
+    }
+    if (active && !instances.includes(active.instanceId)) {
+      instances = [active.instanceId, ...instances]
+    }
     if (!instances.length) {
       return {
         connected: false,
@@ -279,8 +313,24 @@ export async function getStatus() {
         rpcOrigin: RPC_ORIGIN,
         brokerRole: broker.role,
         instanceId: null,
+        windowId: pinnedWindowId,
         instances,
         bridgeError: '尚未发现已开启 AI 控制的浏览器页面'
+      }
+    }
+    if (!active && pinnedWindowId) {
+      return {
+        connected: false,
+        bridgeReady: false,
+        available: false,
+        mode: 'local-rpc',
+        rpcOrigin: RPC_ORIGIN,
+        brokerRole: broker.role,
+        instanceId: null,
+        windowId: pinnedWindowId,
+        instances,
+        bridgeError:
+          (reconnectError && reconnectError.message) || '正在等待原浏览器窗口重新注册'
       }
     }
     if (!active) {
@@ -292,6 +342,7 @@ export async function getStatus() {
         rpcOrigin: RPC_ORIGIN,
         brokerRole: broker.role,
         instanceId: null,
+        windowId: pinnedWindowId,
         instances
       }
     }
@@ -311,6 +362,7 @@ export async function getStatus() {
       mode: 'local-rpc',
       rpcOrigin: RPC_ORIGIN,
       instanceId: null,
+      windowId: pinnedWindowId,
       instances: [],
       bridgeError: error.message
     }
@@ -323,9 +375,14 @@ export async function bridgeCall(method, args = []) {
   try {
     return await rpcRequest(method, args, connection.instanceId)
   } catch (error) {
-    if (error.code !== 'INSTANCE_STALE') throw error
+    if (!['INSTANCE_STALE', 'INSTANCE_UNREGISTERED'].includes(error.code)) throw error
+    const targetWindowId = connection.windowId || pinnedWindowId
     await closeActive()
-    const nextConnection = await ensureConnected()
+    if (!targetWindowId) throw error
+    const nextConnection = await ensureConnected({
+      windowId: targetWindowId,
+      timeoutMs: RECONNECT_DISCOVERY_TIMEOUT_MS
+    })
     return rpcRequest(method, args, nextConnection.instanceId)
   }
 }
@@ -353,7 +410,7 @@ export async function setImageElementSrc(args = {}) {
 }
 
 export async function shutdown() {
-  await closeActive()
+  await closeActive({ clearPinnedWindow: true })
   await stopLocalRpcBroker()
 }
 
