@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Questions"
+  short_description: "Search, validate, organize, and explain questions"
+  default_prompt: "Use $super-editor-questions to search and validate questions, manage current-catalog question resources, or prepare AI explanations for an interactive module."

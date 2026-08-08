@@ -55,13 +55,127 @@ node index.js
 | `editor_search_templates` / `editor_apply_template` | 搜索并应用模板 |
 | `editor_search_components` / `editor_apply_component` | 搜索并应用组件 |
 | `editor_search_images` / `editor_apply_image` | 搜索并应用图片素材 |
+| `editor_upload_file` | 上传本地/base64 图片、音频、视频、PDF 或课件文件 |
+| `editor_list_digital_module_types` | 查询可自动配置的数字模块类型和语义配置 schema |
+| `editor_get_digital_module` / `editor_list_digital_modules` | 查询元素关联的数字模块 |
+| `editor_create_digital_module` / `editor_update_digital_module` | 新增或修改元素数字模块（即时写库） |
+| `editor_delete_digital_module` / `editor_copy_digital_module` | 删除模块或复用同一 model_id 复制关联 |
+| `editor_list_question_paths` / `editor_get_question_search_options` | 读取本书学习路径和题目筛选字典 |
+| `editor_search_questions` / `editor_get_questions` | 查询当前目录、本书资源、学习路径或总题库，并按 GUID 读取详情 |
+| `editor_validate_question_selection` / `editor_get_question_solutions` | 校验数字模块选题并读取答案、解答和解析 |
+| `editor_add_questions_to_catalog` / `editor_remove_catalog_question` / `editor_move_catalog_question` | 管理目录题目资源及顺序（即时写库） |
+| `editor_get_question_explanations` / `editor_start_question_explanation_generation` / `editor_get_question_explanation_status` | 读取、启动生成和查询 AI 讲解 |
+| `editor_save_question_explanation` / `editor_delete_question_explanation` | 保存或删除 AI 讲解记录（即时写库） |
 | `editor_add_block` / `editor_update_block` / `editor_delete_block` | 区块编辑 |
 | `editor_add_element` / `editor_update_element` / `editor_delete_element` | 元素编辑 |
+| `editor_text_info` / `editor_text_document` | 读取文本框摘要或带稳定索引的结构化富文本文档 |
+| `editor_text_set_style` / `editor_text_format` | 设置默认样式，或按全文/范围/匹配/段落应用可见格式 |
+| `editor_text_edit` | 局部插入、替换、删除或查找替换富文本 |
+| `editor_text_set_link` / `editor_text_remove_link` | 原子设置/移除文字超链接并同步元数据 |
+| `editor_text_edit_embed` | 原子插入、更新或删除公式、拼音和内嵌图片 |
+| `editor_text_set_layout` / `editor_text_inspect_layout` | 设置文本框布局并诊断溢出、裁切和字体问题 |
+| `editor_text_fit` / `editor_text_fit_to_box` | 让文本框适应内容 / 保持框大小并缩小字号 |
+| `editor_text_search` / `editor_text_copy_style` / `editor_text_fonts` | 搜索文本、复制样式和查询可用字体 |
 | `editor_checkpoint` / `editor_rollback` | 整页快照与回滚 |
 | `editor_save` / `editor_screenshot` | 保存与渲染核对 |
 | `editor_batch` | 一次往返串行执行多个桥接步骤 |
 
 完整工具以 `tools/list` 为准，桥接契约见 `../../assets/bridge-api-spec.md`。
+
+## 数字模块与媒体文件
+
+- 数字模块工具只接收元素 `elementId`；页面桥接负责从元素所属区块解析数据库数值 `id`
+  作为 `hypermedia_content_id`，不会把区块 uuid 当成后端 id。
+- 新增、修改、删除和复制数字模块都直接请求后端并即时生效，不依赖 `editor_save`。
+- `editor_copy_digital_module` 与编辑器现有复制/粘贴行为一致：目标元素建立新关联，但复用同一个
+  `model_id`，不是独立深克隆。
+- 创建或修改音视频模块时，可先用 `editor_upload_file` 获得 `url/fileId`；也可直接传
+  `mediaPath`，MCP 会先上传并把结果放入 `config.uploadedFile`。
+- `validateOnly=true` 不允许与 `mediaPath` 同传，确保校验模式没有上传副作用；需要校验媒体配置时，
+  先显式调用 `editor_upload_file`，再把已有 URL/metadata 放入 `config`。
+- 本地文件经 base64 进入 RPC，当前主动限制为 70MB。更大的音视频应先压缩，或使用素材库/
+  AI 生成服务返回的远程 URL，避免 100MB broker 请求上限和 90 秒 RPC 超时。
+
+## 题目检索、目录资源与 AI 讲解
+
+- `editor_search_questions.scope` 支持：
+  - `currentCatalog`：当前目录已添加的题目资源；
+  - `currentBookResources`：当前书全部目录已添加的题目资源；
+  - `learningPath`：按本书学习路径节点检索，先用 `editor_list_question_paths` 获取 `pathId`；
+  - `book`：`learningPath` 的兼容别名；
+  - `global`：总题库。
+- 复杂筛选前先调用 `editor_get_question_search_options` 获取真实 id。搜索工具提供显式的学段、学科、
+  年级、册次、难度、题型、资源可用性、来源和标签筛选；旧 `filters` 对象只做白名单兼容，不能覆盖
+  关键词和分页参数。
+- `editor_get_questions` 默认保持数组返回；`includeDiagnostics=true`（或兼容参数
+  `returnEnvelope=true`）返回 `items/requestedGuids/foundGuids/missingGuids`，避免静默丢失 GUID。
+- 创建答题类数字模块前调用 `editor_validate_question_selection`，检查缺失、重复、父子题冲突以及
+  目标模块类型的数量和资源要求。最终关联使用题目/子题 `guid`，不要使用列表记录的数值 id。
+- 删除和移动目录题目使用 `resourceMappingId`，不是题目 GUID。目录题目的新增、删除、排序都会立即
+  写入后端，不依赖 `editor_save`；新增支持 `validateOnly=true`。
+- AI 讲解生成采用启动/状态分离：先调用 `editor_start_question_explanation_generation`，再按需调用
+  `editor_get_question_explanation_status`。MCP 不在单次调用里长轮询。数字模块 94 使用讲解记录的 `id`
+  作为 `explain_ids`，不要把题目 GUID、子题 GUID 和讲解记录 id 混用。
+
+## 结构化富文本
+
+- Bridge 1.6.0 起，内容类工具统一支持三类目标：普通文本
+  `{ target:{ kind:'element', elementId } }`、表格单元格
+  `{ target:{ kind:'tableCell', tableId, cellId } }`（也可用 `row+col`）和思维导图节点
+  `{ target:{ kind:'mindNode', mindId, nodeId } }`。原有 `{ elementId }` 调用保持兼容，但一次调用只能传
+  `elementId` 或 `target` 之一。适用于 `info/document/set_content/set_style/edit/set_link/remove_link/edit_embed/format`。
+- 用 `editor_text_document` 取得可见 `plainText/displayText`、Quill `indexText`、
+  `displayIndexMap`、HTML、段落、格式 runs、内嵌对象、超链接、默认样式、布局，以及联合覆盖
+  canonical HTML 与稳定排序超链接元数据的 `contentHash`；`htmlHash`、`hyperlinkMetadataHash`
+  用于分项诊断。仅链接参数变化也会改变 `contentHash`。
+  拼音框在可见文本中展开 word，但在 Quill 索引中仍长度 1；不能把 plainText 下标直接用于写入。
+- `editor_text_edit.action` 支持 `insert/replace/delete/findReplace`。`insert` 使用 `index`，
+  `replace/delete` 使用 `index+length`；只有 `findReplace` 使用 `match+occurrence`，省略 `text/html`
+  表示删除匹配。写入内容时 `text` 与 `html` 二选一。高风险批量替换先用 `dryRun=true`，写入时带上
+  最近读取到的 `expectedContentHash`，它同时保护正文与超链接参数。
+- 只有明确要整段重写时使用 `editor_text_set_content`，并同样带最新 `expectedContentHash`、先
+  `dryRun=true`；它会检查未知链接和不能安全往返的内嵌结构。
+- 正文读取与写入最多执行 5 轮生产 `parse → convertHTML`，直到相邻两轮结果一致；每轮都会检查
+  自定义格式和内嵌对象是否安全往返，超限返回 `TEXT_CANONICALIZATION_UNSTABLE` 而不写入。
+- 超链接不要塞进 `editor_text_format`：用 `editor_text_set_link` 原子设置范围并同步
+  `hyperlinkParamList`，用 `editor_text_remove_link` 按 id 或范围移除。新链接必须提供真实元数据，不能猜测；
+  `hyperlink_id` 可省略并由 Bridge 生成，后续以返回的 `hyperlinkId` 为准。
+- 公式、拼音和内嵌图片用 `editor_text_edit_embed` 增删改；插入拼音必须给 pinyin+单汉字 word。
+  图片支持 url、宽高/原始宽高、旋转、透明度、翻转、描边、垂直对齐和偏移等 ImageBot 结构字段；
+  更新会与当前 embed value 合并，可只改部分字段，不能用 CSS style 代替结构字段；
+  删除不传 `value`。页面未注册对应自定义 blot 时会明确拒绝写入。
+- `editor_text_format.scope` 支持 `default/all/range/match/paragraph`，覆盖中英数字字体、字号、颜色、
+  粗斜体、上下标、下划线/删除线/波浪线/着重号，以及对齐、行距、段距、缩进和列表；
+  `paragraphIndexes` 是来自文档段落的 0-based 下标。该工具支持 `expectedContentHash + dryRun`。
+- `editor_text_set_style` 是 `scope=default` 的便捷安全入口，只接受默认字体、字号、颜色、粗斜体、
+  行距和字距等默认字段；它不会覆盖已有内联 run。对齐、列表、下划线、背景等可见格式请使用
+  `editor_text_format(scope=all/range/match/paragraph)`。
+- `editor_text_set_layout` 修改的是文本框：自适应模式、最大宽高、溢出、内边距、横竖排、对齐、背景、
+  描边、阴影和圆角；嵌套对象由页面桥接深合并，不会因只改一个字段而清空其余配置。
+  `overflowType` 使用 `auto/overWithBreak/overSizeScroll` 数组；填充使用
+  `{ enabled?, color? }` 或 null（禁用并清空），不接受会被静默忽略的颜色字符串。该工具不修改正文，
+  不接受 `expectedContentHash/dryRun`。布局/几何类
+  `editor_text_adaptive/fit/set_layout/inspect_layout/fit_to_box` 仅支持独立文本元素的 legacy `elementId`，
+  不支持表格单元格或思维导图节点。
+- `editor_text_inspect_layout` 用于写后诊断。`editor_text_fit` 会按当前 `extendType` 改变文本框尺寸；
+  它不修改正文，也不接受 `expectedContentHash/dryRun`。`editor_text_fit_to_box` 保持宽高并在
+  `minFontSize/maxFontSize/step` 范围内缩小字号，接受 `expectedContentHash` 但不接受 `dryRun`；元素未渲染时会
+  明确返回 `applied=false/reason=element-not-rendered`。混合或不可解析字号默认返回
+  `applied=false/reason=mixed-font-sizes/requiresExplicitUniformization=true` 且零写入；只有用户明确同意统一
+  原字号后才传 `allowUniformizeMixedSizes=true`，并核对 `uniformizedMixedSizes=true`。
+- `editor_text_search` 当前搜索已加载目录三类目标的可见文本，`targetKinds` 默认
+  `element/tableCell/mindNode`，返回可直接写入的 `index/length`，并另给仅供展示的
+  `displayIndex/displayLength`、`target/targetKind/elementId/blockId/snippet`；
+  `editor_text_copy_style` 可用 `sourceTarget/targetTargets` 或 legacy id（两侧可混用）把样式复制到最多
+  200 个目标。嵌套目标仅支持 `default/character/paragraph`；`layout/all` 会返回
+  `TEXT_LAYOUT_TARGET_UNSUPPORTED`。设置字体前先用
+  `editor_text_fonts` 按 `all/chinese/english/number` 查询可用项。
+
+文本写操作修改当前页本地状态，完成后仍需 `editor_save`。推荐先
+`editor_checkpoint({ label? })`，读取文档并携带 hash 局部修改，随后检查布局和截图；失败时调用
+`editor_rollback({ checkpointId })`。包含超链接、公式等内嵌结构时尤其不要用通用
+`editor_update_element` 直接拼接 HTML；Bridge 会对 content/hyperlinkParamList/字数统计字段返回
+`TEXT_SPECIALIZED_UPDATE_REQUIRED`。几何和默认样式仍可通用更新；正文应使用结构化文本工具并复读核对。
 
 ## 故障语义
 

@@ -1,6 +1,6 @@
 ---
 name: super-editor-elements
-description: 超媒编辑器（super-editor-control 插件）元素操作技能。在需要新增、删除、修改、移动、缩放、旋转、复制、选中、调整层级、打组/解组超媒画布元素（文本/图片/形状/表格/音频/视频等）时使用。表格操控（读网格/改单元格/行列增删/合并拆分/行高自适应收紧）见 §6.5，思维导图操控（读节点树/改文本样式/增删节点/切模板主题）见 §6.6，文本操控（内容修改后的宽高自适应与组内联动）见 §6.7。详细描述 window.__superEditor 桥接对象中 addElement/updateElement/getElement/listElements/selectElement/moveElement/resizeElement/rotateElement/duplicateElement/orderElement/groupElements/ungroup 的调用方式、各元素类型默认结构与文本样式模板。
+description: 超媒编辑器（super-editor-control 插件）通用元素操作技能。在需要新增、删除、移动、缩放、旋转、复制、选中、调整层级、打组/解组文本、图片、形状、表格、音视频等画布元素时使用。表格和思维导图的结构操作仍由本技能说明；涉及文本内容结构、局部替换、字符/段落/列表格式、文本框布局与适配时改用 super-editor-text。详细描述 window.__superEditor 的通用元素方法、元素默认结构与坐标规则。
 ---
 # Super Editor Elements（元素控制）
 
@@ -33,7 +33,7 @@ description: 超媒编辑器（super-editor-control 插件）元素操作技能�
 | `setElementText` / `setImageSrc` | `{ elementId, ... }` | 无（文本/资源快捷设置） |
 | `setTableCellContent` / `setTableCellBackground` / `setTableData` / `getTableGrid` / `getTableInfo` / `insertTableRow` / `deleteTableRow` / `insertTableColumn` / `deleteTableColumn` / `mergeTableCells` / `splitTableCell` / `fitTableHeights` / `setTabs` / `setActiveTab` | 表格/选项卡专用（v0.4） | 见 §6.5 |
 | `getMindData` / `getMindTree` / `setMindData` / `setMindNodeText` / `addMindNode` / `deleteMindNode` / `updateMindNode` / `setMindTemplate` / `setMindTheme` | 思维导图专用（v0.5） | 见 §6.6 |
-| `getTextInfo` / `setTextContent` / `setTextAdaptive` / `fitTextSize` | 文本专用（v0.6，含宽高自适应与组内联动） | 见 §6.7 |
+| `getTextInfo` / `setTextContent` / `setTextAdaptive` / `fitTextSize` | 文本基础能力（完整结构化编辑改用 `super-editor-text`） | 见 §6.7 |
 | `orderElement(payload)` | `{ elementId, position }`，position ∈ front/forward/backward/back | 无 |
 | `groupElements(elementIds)` | `string[]`（≥2） | `{ groupId }` |
 | `ungroup(groupId)` | 标量 | 无 |
@@ -181,6 +181,8 @@ await b.getTableGrid({ tableId: "V3MFeGf4Pi" })   // 核对
 
 注意：
 - 被合并覆盖的格子（`isCovered: true`）不可写内容，写合并起点格（`isOrigin: true`）。
+- 单元格若需局部替换、字符/段落格式、链接或 embed，不要整体写 `setTableCellContent`；加载
+  `super-editor-text`，使用 `{ target:{ kind:'tableCell', tableId, cellId } }`（或 `row+col`）读取并编辑。
 - 行列增删/合并拆分是**结构操作**，改动前先 `checkpoint()`，出错 `rollback()`。
 - 删除行/列时若覆盖到合并格，算法自动调整 rowspan/colspan（与编辑器右键菜单同语义）。
 - 行高只增不减：编辑器对内容变高自动撑大行高，但变瘮不收缩。字号/内容缩小后（如统一缩放字号），用 `fitTableHeights` 收紧行高，避免留下大片空白；表格缩短后注意同区块内其他元素（如底部图片）是否需要随之调整位置。
@@ -228,11 +230,15 @@ await b.getMindTree({ mindId: "xxx" })                     // 核对
 
 注意：
 - 节点 id 来自 `getMindTree` 返回的 `id`/`path`；不要猜 id。
+- 节点若需局部替换、字符/段落格式、链接或 embed，加载 `super-editor-text`，使用
+  `{ target:{ kind:'mindNode', mindId, nodeId } }`；`updateMindNode` 仍用于整个节点的数据/样式字段。
 - 结构操作（增删节点、整图替换）前先 `checkpoint()`，出错 `rollback()`。
 - 节点文本是 HTML：要加粗/变色请写在文本 HTML 的 style 里，或节点级用 `updateMindNode` 的 patch（作用于整个节点）。
 - 改完 content 后 MindElement 会自动重新导入渲染，元素尺寸会随内容自动适配。
 
 ﻿## 6.7 文本操控（数据模型与自适应机制）
+
+> 本节只保留旧的基础自适应说明。涉及普通文本、表格单元格或思维导图节点的局部内容编辑、字符/段落/列表格式、搜索和样式复制，或独立文本框布局与固定框缩字号时，加载独立的 `super-editor-text` 技能。
 
 文本元素（type=text）内容修改后**宽高会自动适应**，但效果取决于 `background.extendType` 与尺寸约束，且**同组内其他元素可能被联动位移**。AI 控制时要先读、再改、后核对。
 

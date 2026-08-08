@@ -67,6 +67,20 @@ src/modules/contentEditor/aiControl/
 | 桥接方法 | 实现（现有逻辑） |
 |----------|------------------|
 | `getState()` | `commonBook/bookInfo` + `contentEditorSlides` 的 getters：`slides`、`currentSlide`、`currentSlideElementTree`、`baseEditorMain/selectElementIdList` |
+| `getDigitalModule({ elementId })` | 先在当前 `blockTemplateList` 中定位元素所属模板，再以 `control_id=elementId`、`hypermedia_content_id=template.id` 调 `hypermedia/getControlModelList`；这里必须用模板后端 `id`，不能用 `uuid` |
+| `createDigitalModule/updateDigitalModule` | 复用数字模块页面的 `hypermedia/addControlModel` 请求结构；更新时保留关系、模型、内容行和嵌套实体 ID，成功后广播 `ELEMENT_DIGITAL_MODULE` |
+| `deleteDigitalModule` | 先查真实关系，再调 `hypermedia/deleteControlPosition({ id, model_id, type })` |
+| `copyDigitalModule` | 调 `hypermedia/addcontrolmodelrelation` 给目标元素新增关系；当前语义是共享 `model_id`，不是独立深复制 |
+| `listQuestionPaths` | `bookpath/getbooklearningpathtree`；递归展开 `child_list`，同时支持扁平节点和原树返回 |
+| `getQuestionSearchOptions` | `dictionary/gettypelist(type=1,3,5)` + `book/getbooksearchmap(book_type=101)`；缓存实时字典，`refresh` 时重取 |
+| `searchQuestions` | 当前目录/当前书资源用 `hypermedia/getcatalogresources`；学习路径用 `getbooklearningpathtree` + `getchildrenlistquesbypathid`；总题库用 `sbyquestion/getquestionlist`；`book` 仅是 `learningPath` 兼容别名 |
+| `getQuestions/validateQuestionSelection` | `sbyquestion/getquestioninfolist` + `questions.js` 规范化/诊断；返回缺失、重复、父子冲突和模块兼容性，type 82 额外校验测评计时组合 |
+| `getQuestionSolutions` | 对已找到 GUID 小批并发请求 `sbyquestion/getquestionsolution`，保留 `missingGuids` |
+| `addQuestionsToCatalog/removeCatalogQuestion/moveCatalogQuestion` | 分别复用 `hypermedia/addcatalogresource`、`deletecatalogresource`、`updatecatalogresourcesort`；删除/排序使用关系 `resourceMappingId` |
+| `getQuestionExplanations/startQuestionExplanationGeneration/getQuestionExplanationStatus` | 已保存讲解用 `sbyquestion/getquestionaiexplain`；生成与状态复用 `bookhypermedia/aiexplain/generateaiexplain`、`getaiexplainstatebyguid`、`getaiexplainbyguid` |
+| `saveQuestionExplanation/deleteQuestionExplanation` | `sbyquestion/savequestionaiexplain` / `deletequestionaiexplain`；按讲解记录数字 ID 更新或删除 |
+| `uploadFile` | 把 dataURL/base64 转为 `File`，复用 `request.upLoadFile`；图片、音频、视频数字模块共用 |
+| `getTextDocument/editText/formatText/...`（Bridge 1.6.0） | 通过 `richTextTarget` 统一解析普通文本 `{elementId}`、表格单元格 `{tableId,cellId或row+col}`、思维导图节点 `{mindId,nodeId}`；内容级方法复用同一 Quill canonical 流程，布局级方法仍只处理独立文本元素 |
 | `listSlides()` | `contentEditorSlides/slides` |
 | `selectSlide(id)` | `dispatch('contentEditorSlides/selectSlide', id)` |
 | `getSlide(id)` | 由 `slides`/`currentSlideAllTemplateList` + `dfcRecursion` 组装（参考 getter `currentSlideElementTree`） |
@@ -115,6 +129,13 @@ async function mutate(action, payload) {
 ## 4. 注意事项
 
 - **不要绕过 Vuex**：直接改 DOM/store 会让操作日志与编辑器状态失效；回退只允许走桥接快照（checkpoint/rollback）。
+- **区分区块双 ID**：画布 API 的 `blockId`、元素 `templateId` 是模板 `uuid`；数字模块请求的 `hypermedia_content_id` 是同一模板对象的后端 `id`。桥接必须从 `elementId` 内部解析，不接受调用方传该后端字段。
+- **数字模块即时写库**：新增、修改、删除、关系复制不受画布 `checkpoint/rollback/save` 管理；先读现状、明确冲突策略，写后重新查询验证。
+- **题目资源即时写库**：目录题目添加/移除/排序、讲解保存/删除都不受画布回滚或保存管理；添加用题目 GUID，移除/排序用 `resourceMappingId`。AI 讲解生成采用 start/status 两步，Bridge 与 MCP 均不在启动调用里长轮询。
+- **题目能力边界**：当前只管理题目资源及讲解，不实现完整题目编辑、OCR/AI 录题或把题目排版插入画布区块。
+- **嵌套富文本布局**：单元格/思维导图文字写入后若无法独立验证领域布局，返回
+  `settled=false/deferredLayout=true`；必须截图核对外层表格/思维导图。共享 hyperlinkId 的单目标 metadata
+  修改返回 `TEXT_HYPERLINK_SHARED`，应省略旧 id 新建该目标的独立链接。
 - **批量执行**：连续小步骤（改多个元素、多步读取、快照+编辑+核对）用 `batch({ steps })` 一次调用串行执行，一次返回全部结果，避免逐条 RPC 往返等待；写步骤之间会自动等渲染，安全可靠。
 - **PDF 书差异**：`smart_book_type === 1` 的 PDF 书有占位页、页码合并逻辑，桥接 `listSlides/getSlide` 需兼容。
 - **协同锁**：页面有 `EditLock` 协同编辑锁，多人编辑时桥接操作同样受锁约束。

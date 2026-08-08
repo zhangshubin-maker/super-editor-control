@@ -4,7 +4,187 @@
 import { createInterface } from 'node:readline'
 import * as driver from './driver.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.6.0' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.8.0' }
+
+const ID_SCHEMA = { type: ['string', 'number'] }
+const ID_LIST_SCHEMA = {
+  type: 'array',
+  items: { type: ['string', 'number'] }
+}
+const QUESTION_FILTER_PROPERTIES = {
+  period: { ...ID_SCHEMA, description: '学段 id' },
+  subjectId: { ...ID_SCHEMA, description: '学科 id' },
+  gradeId: { ...ID_SCHEMA, description: '年级 id' },
+  volume: { ...ID_SCHEMA, description: '册次/学期 id' },
+  difficulty: { ...ID_SCHEMA, description: '难度 id，通常为 1-5' },
+  features: { ...ID_LIST_SCHEMA, description: '题目特征 id 列表' },
+  guidList: {
+    type: 'array',
+    items: { type: 'string' },
+    description: '限定题目 GUID 列表'
+  },
+  haveResolution: { type: ['boolean', 'number'], description: '是否有解析' },
+  haveReview: { type: ['boolean', 'number'], description: '是否有点评' },
+  haveSolution: { type: ['boolean', 'number'], description: '是否有解答' },
+  haveSolutionVideo: { type: ['boolean', 'number'], description: '是否有解题视频' },
+  subModelIds: { ...ID_LIST_SCHEMA, description: '题型 id 列表' },
+  searchAreaTypes: { ...ID_LIST_SCHEMA, description: '检索区域类型列表' },
+  sourceInfos: {
+    type: 'array',
+    items: { type: ['object', 'string', 'number'] },
+    description: '来源筛选列表'
+  },
+  businessTypes: { ...ID_LIST_SCHEMA, description: '业务类型列表' },
+  haveTag: { type: ['boolean', 'number'], description: '是否有知识点/标签' },
+  tagNodeIds: { ...ID_LIST_SCHEMA, description: '知识点/标签节点 id 列表' }
+}
+
+const TEXT_WAIT_SCHEMA = {
+  type: 'number',
+  minimum: 0,
+  maximum: 10000,
+  description: '渲染和尺寸重测等待上限（毫秒），默认 2000'
+}
+const TEXT_INDEX_SCHEMA = {
+  type: 'integer',
+  minimum: 0,
+  description: 'UTF-16 / Quill 字符索引；内嵌对象长度按 1 计算'
+}
+const TEXT_TARGET_KINDS = ['element', 'tableCell', 'mindNode']
+const TEXT_TARGET_SCHEMA = {
+  type: 'object',
+  properties: {
+    kind: {
+      type: 'string',
+      enum: TEXT_TARGET_KINDS,
+      description: '富文本目标类型：普通文本元素、表格单元格或思维导图节点'
+    },
+    elementId: { ...ID_SCHEMA, description: 'kind=element 时的文本元素 id' },
+    tableId: { ...ID_SCHEMA, description: 'kind=tableCell 时的表格元素 id' },
+    cellId: { ...ID_SCHEMA, description: '稳定单元格 id；可替代 row + col' },
+    row: { type: 'integer', minimum: 0, description: '0-based 行下标，需与 col 同时提供' },
+    col: { type: 'integer', minimum: 0, description: '0-based 列下标，需与 row 同时提供' },
+    mindId: { ...ID_SCHEMA, description: 'kind=mindNode 时的思维导图元素 id' },
+    nodeId: { ...ID_SCHEMA, description: 'kind=mindNode 时的节点 data.id' }
+  },
+  required: ['kind'],
+  allOf: [
+    {
+      if: { properties: { kind: { const: 'element' } } },
+      then: { required: ['elementId'] }
+    },
+    {
+      if: { properties: { kind: { const: 'tableCell' } } },
+      then: {
+        required: ['tableId'],
+        anyOf: [{ required: ['cellId'] }, { required: ['row', 'col'] }]
+      }
+    },
+    {
+      if: { properties: { kind: { const: 'mindNode' } } },
+      then: { required: ['mindId', 'nodeId'] }
+    }
+  ],
+  additionalProperties: false
+}
+const TEXT_TARGET_PROPERTIES = {
+  elementId: {
+    type: 'string',
+    minLength: 1,
+    description: '兼容旧调用：普通文本元素 id；与 target 二选一'
+  },
+  target: {
+    ...TEXT_TARGET_SCHEMA,
+    description: '统一富文本目标；与 legacy elementId 二选一'
+  }
+}
+const TEXT_TARGET_SELECTOR_SCHEMA = {
+  oneOf: [{ required: ['elementId'] }, { required: ['target'] }]
+}
+const TEXT_FORMAT_PROPERTIES = {
+  fontName: { type: 'string' },
+  fontChinese: { type: 'string' },
+  fontEnglish: { type: 'string' },
+  fontNumber: { type: 'string' },
+  fontSize: { type: 'number', minimum: 1, maximum: 200 },
+  color: { type: ['string', 'null'] },
+  background: { type: ['string', 'null'] },
+  bold: { type: ['boolean', 'number', 'null'] },
+  fontWeight: { type: ['number', 'string', 'null'] },
+  italic: { type: ['boolean', 'null'] },
+  script: { type: ['string', 'boolean', 'null'], enum: ['super', 'sub', 'normal', false, null] },
+  underline: { type: ['boolean', 'string', 'object', 'null'] },
+  strike: { type: ['boolean', 'string', 'object', 'null'] },
+  wave: { type: ['boolean', 'object', 'null'] },
+  emphasis: { type: ['boolean', 'object', 'null'] },
+  deleteBox: { type: ['boolean', 'object', 'null'] },
+  align: { type: ['string', 'null'], enum: ['left', 'center', 'right', 'justify', null] },
+  justifyLast: { type: ['string', 'null'], enum: ['left', 'center', 'right', null] },
+  lineHeight: { type: ['number', 'string', 'null'] },
+  letterSpacing: { type: ['number', 'string', 'null'] },
+  wordSpace: { type: ['number', 'string', 'null'] },
+  paragraphBefore: { type: ['number', 'string', 'null'] },
+  paragraphAfter: { type: ['number', 'string', 'null'] },
+  paragraphSpacing: { type: ['number', 'string', 'null'] },
+  indent: { type: ['number', 'string', 'null'] },
+  textIndent: { type: ['number', 'string', 'null'] },
+  list: { type: ['object', 'string', 'boolean', 'null'] }
+}
+const TEXT_DEFAULT_STYLE_PROPERTIES = {
+  fontName: TEXT_FORMAT_PROPERTIES.fontName,
+  fontChinese: TEXT_FORMAT_PROPERTIES.fontChinese,
+  fontEnglish: TEXT_FORMAT_PROPERTIES.fontEnglish,
+  fontNumber: TEXT_FORMAT_PROPERTIES.fontNumber,
+  fontSize: TEXT_FORMAT_PROPERTIES.fontSize,
+  color: TEXT_FORMAT_PROPERTIES.color,
+  bold: TEXT_FORMAT_PROPERTIES.bold,
+  fontWeight: TEXT_FORMAT_PROPERTIES.fontWeight,
+  italic: TEXT_FORMAT_PROPERTIES.italic,
+  lineHeight: TEXT_FORMAT_PROPERTIES.lineHeight,
+  wordSpace: TEXT_FORMAT_PROPERTIES.wordSpace,
+  letterSpacing: TEXT_FORMAT_PROPERTIES.letterSpacing,
+  justifyLast: TEXT_FORMAT_PROPERTIES.justifyLast
+}
+const TEXT_LAYOUT_PROPERTIES = {
+  extendType: { type: 'string', enum: ['both', 'horizontal', 'vertical', 'none'] },
+  maxWidth: { type: ['number', 'string', 'null'] },
+  maxHeight: { type: ['number', 'string', 'null'] },
+  overflowType: {
+    type: ['array', 'null'],
+    items: { type: 'string', enum: ['auto', 'overWithBreak', 'overSizeScroll'] },
+    uniqueItems: true
+  },
+  paddingTop: { type: 'number', minimum: 0 },
+  paddingBottom: { type: 'number', minimum: 0 },
+  paddingLeft: { type: 'number', minimum: 0 },
+  paddingRight: { type: 'number', minimum: 0 },
+  textAlign: { type: 'string', enum: ['left', 'center', 'right', 'justify'] },
+  verticalAlign: { type: 'string', enum: ['top', 'middle', 'bottom'] },
+  vertical: { type: 'boolean' },
+  vAlignBottom: { type: 'boolean' },
+  alignJustifyLast: { type: ['string', 'null'], enum: ['left', 'center', 'right', null] },
+  adaptive: { type: ['boolean', 'string', 'number', 'null'] },
+  lineHeight: { type: ['number', 'string', 'null'] },
+  wordSpace: { type: ['number', 'string', 'null'] },
+  background: { type: ['object', 'null'], description: '与现有 background 深合并，不整体覆盖' },
+  fill: {
+    type: ['object', 'null'],
+    properties: {
+      enabled: { type: 'boolean' },
+      color: { type: ['string', 'null'] }
+    },
+    minProperties: 1,
+    additionalProperties: false,
+    description: '文本框填充配置；null 会禁用并清空，清除颜色传 { color: null }，禁用传 { enabled: false }'
+  },
+  outline: { type: ['object', 'null'], description: '与现有 outline 深合并' },
+  shadow: { type: ['object', 'null'], description: '与现有 shadow 深合并' },
+  borderRadius: { type: ['number', 'string', 'object', 'null'] },
+  pinyinStyle: { type: ['object', 'null'] },
+  listIndentOffset: { type: ['number', 'null'] },
+  listOrderedIndents: { type: ['array', 'null'], items: { type: 'object' } },
+  listBulletIndents: { type: ['array', 'null'], items: { type: 'object' } }
+}
 
 const TOOLS = [
   {
@@ -212,6 +392,407 @@ const TOOLS = [
       additionalProperties: false
     }
   },
+  {
+    name: 'editor_upload_file',
+    description: '上传本地或 base64 文件到课件媒体库，支持图片、音频、视频、PDF 和 PPT/PPTX。filePath 由 MCP 进程读取并转成 dataURL，再通过编辑器登录态即时上传。当前 base64 RPC 通道限制本地文件不超过 70MB；较大音视频请先压缩或使用已有远程素材 URL。返回 { url, fileId, fileName, mimeType? }。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: '本地文件路径（与 data 二选一）' },
+        data: { type: 'string', description: 'base64 或 dataURL 文件数据（与 filePath 二选一）' },
+        fileName: { type: 'string', description: '上传文件名；传 filePath 时默认取路径中的文件名' },
+        mimeType: { type: 'string', description: '文件 MIME；传 filePath 时默认按扩展名识别' },
+        kind: {
+          type: 'string',
+          enum: ['image', 'audio', 'video', 'document', 'other'],
+          description: '文件用途提示；默认按 MIME 判断'
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_list_digital_module_types',
+    description: '列出 AI 当前可配置的数字模块类型、名称、语义配置 schema、默认值和资源依赖。创建模块前优先调用，避免直接拼接后端 add_model_req_en。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: ['string', 'number'], description: '可选：只查询指定数字模块类型或别名' },
+        supportedOnly: { type: 'boolean', description: '是否仅返回已支持自动配置的类型，默认 true' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_digital_module',
+    description: '查询一个元素当前关联的数字模块。只需 elementId；桥接会自动找到元素所在区块的数据库 id（不是区块 uuid）作为 hypermedia_content_id。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', description: '目标元素 id' },
+        includeRaw: { type: 'boolean', description: '是否附带原始 catalog/model content 响应，默认 false' }
+      },
+      required: ['elementId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_list_digital_modules',
+    description: '批量查询当前目录元素关联的数字模块，可按元素 id 和模块类型筛选。默认仅返回存在模块的元素；includeEmpty=true 时也返回未关联项。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '可选元素 id 列表；省略时检查当前目录可见的全部元素'
+        },
+        type: { type: ['string', 'number'], description: '数字模块类型或别名筛选' },
+        includeEmpty: { type: 'boolean', description: '是否包含未关联数字模块的元素，默认 false' },
+        includeRaw: { type: 'boolean', description: '是否附带原始后端响应，默认 false' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_create_digital_module',
+    description: '为元素新增数字模块并立即写入后端，不需要随后 editor_save。只传 elementId，桥接会解析所属区块的数据库 id；已有模块时默认拒绝，replaceExisting=true 才显式替换。mediaPath 可便捷上传本地音视频/文件，上传结果会写入 config.uploadedFile 后交给类型适配器。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', description: '目标元素 id' },
+        type: { type: ['string', 'number'], description: '数字模块类型编号或 list types 返回的别名' },
+        name: { type: 'string', description: '有意义的模块名称；省略时按元素名和模块类型自动生成' },
+        config: { type: 'object', description: '该类型的语义配置；结构以 editor_list_digital_module_types 为准' },
+        replaceExisting: { type: 'boolean', description: '目标已有模块时是否先替换，默认 false' },
+        validateOnly: { type: 'boolean', description: '只解析、校验并返回将提交的模块数据，不创建模块；不能与 mediaPath 同传，可在 config 中使用已有 URL/metadata' },
+        mediaPath: { type: 'string', description: '可选本地媒体/文件路径；当前上限 70MB' },
+        mediaFileName: { type: 'string', description: 'mediaPath 上传时使用的文件名' },
+        mediaMimeType: { type: 'string', description: 'mediaPath 上传时使用的 MIME' }
+      },
+      required: ['elementId', 'type'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_update_digital_module',
+    description: '修改元素当前数字模块并立即写入后端。桥接会读取并保留 relation id、model_id 和内容行 id；type 省略时沿用原类型，改变类型必须显式 replaceType=true。mediaPath 会先上传并写入 config.uploadedFile。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', description: '目标元素 id' },
+        type: { type: ['string', 'number'], description: '新模块类型；省略时沿用原类型' },
+        name: { type: 'string', description: '新的模块名称；省略时保留原名称' },
+        config: { type: 'object', description: '要更新的语义配置；结构以 editor_list_digital_module_types 为准' },
+        replaceType: { type: 'boolean', description: '是否允许改变数字模块类型，默认 false' },
+        validateOnly: { type: 'boolean', description: '只解析、校验并返回将提交的模块数据，不更新模块；不能与 mediaPath 同传，可在 config 中使用已有 URL/metadata' },
+        mediaPath: { type: 'string', description: '可选本地媒体/文件路径；当前上限 70MB' },
+        mediaFileName: { type: 'string', description: 'mediaPath 上传时使用的文件名' },
+        mediaMimeType: { type: 'string', description: 'mediaPath 上传时使用的 MIME' }
+      },
+      required: ['elementId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_delete_digital_module',
+    description: '删除元素当前关联的数字模块并立即写入后端。桥接会先查询真实 relation id/model_id/type，再调用删除接口；不公开 hypermedia_content_id。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', description: '目标元素 id' },
+        ignoreMissing: { type: 'boolean', description: '没有关联模块时是否按成功返回，默认 true' }
+      },
+      required: ['elementId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_copy_digital_module',
+    description: '把已有数字模块复制关联到另一个元素并立即写入后端。传 sourceElementId 自动读取 model_id，或直接传 modelId；复制与编辑器“复制/粘贴数字模块”一致，共享同一个 model_id，不是独立深克隆。目标已有模块时默认拒绝。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourceElementId: { type: 'string', description: '源元素 id（与 modelId 二选一）' },
+        modelId: { type: ['string', 'number'], description: '已有数字模块 model_id（与 sourceElementId 二选一）' },
+        targetElementId: { type: 'string', description: '目标元素 id' },
+        replaceExisting: { type: 'boolean', description: '目标已有模块时是否先删除再关联，默认 false' }
+      },
+      required: ['targetElementId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_list_question_paths',
+    description: '读取一本书可用于题目检索的学习路径/教材目录节点。默认返回递归展开后的节点，pathId 可直接传给 editor_search_questions 的 learningPath/book 范围。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        bookId: { ...ID_SCHEMA, description: '书本 id；省略时使用当前书本' },
+        flatten: { type: 'boolean', description: '是否返回扁平列表，默认 true；false 返回树结构' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_question_search_options',
+    description: '读取题目检索可用的学段、学科、年级、册次、难度、题型和高级筛选字典，避免猜测后端筛选 id。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        bookId: { ...ID_SCHEMA, description: '书本 id；省略时使用当前书本' },
+        refresh: { type: 'boolean', description: '是否跳过页面缓存并重新请求，默认 false' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_search_questions',
+    description: '搜索题目。支持当前目录、当前书已添加资源、本书学习路径和总题库；返回题目 GUID、题干摘要、题型、答案/解析可用性及分页/部分结果诊断。book 是 learningPath 的兼容别名；高级筛选由 global 范围执行，其他范围会明确返回 ignoredFilters。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: {
+          type: 'string',
+          enum: ['currentCatalog', 'currentBookResources', 'learningPath', 'book', 'global'],
+          description: '查询范围，默认 currentCatalog'
+        },
+        query: { type: 'string', description: '题干关键词或题目 GUID' },
+        bookId: { type: ['string', 'number'], description: '书本 id；省略时使用当前书本' },
+        catalogId: { type: ['string', 'number'], description: '编辑器目录 id；currentCatalog 默认当前目录' },
+        pathId: { type: ['string', 'number'], description: '学习路径节点 id；先用 editor_list_question_paths 获取' },
+        quesScope: { type: 'number', enum: [1, 2], description: '学习路径题目范围：1 常规题目，2 定制题目' },
+        pageNo: { type: 'number', minimum: 0, description: '页码，从 0 开始，默认 0' },
+        pageSize: {
+          type: 'number',
+          minimum: 1,
+          maximum: 100,
+          description: '每页数量，范围 1-100，默认 20'
+        },
+        ...QUESTION_FILTER_PROPERTIES,
+        filters: {
+          type: 'object',
+          description: '兼容旧调用的高级筛选对象；桥接只接受已声明的白名单字段，且不能覆盖关键词或分页'
+        },
+        includeRaw: { type: 'boolean', description: '是否附带原始题目数据，默认 false' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_questions',
+    description: '按 GUID 批量读取题目及子题详情。数字模块关联题目时应使用返回的 guid/子题 guid，不要使用列表记录的数值 id。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guids: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: { type: 'string' },
+          description: '题目 GUID 列表，最多 50 个'
+        },
+        includeRaw: { type: 'boolean', description: '是否附带完整原始题目结构，默认 false' },
+        includeDiagnostics: {
+          type: 'boolean',
+          description: '返回 items/requestedGuids/uniqueGuids/foundGuids/missingGuids/duplicateGuids 诊断信封；默认 false 时保持数组返回'
+        },
+        returnEnvelope: {
+          type: 'boolean',
+          description: 'includeDiagnostics 的兼容别名；任一为 true 都返回诊断信封'
+        }
+      },
+      required: ['guids'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_validate_question_selection',
+    description: '在创建答题类数字模块前校验题目选择：检查缺失、重复、父子题冲突，以及目标模块类型对题目数量、答案/解答和 AI 讲解资源的要求。只读，不写库。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guids: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: { type: 'string' },
+          description: '待关联的题目/子题 GUID'
+        },
+        targetModuleType: {
+          type: ['string', 'number'],
+          description: '目标数字模块类型，如 82 在线答题、83 核对答案、93 逻辑组件、94 AI 讲解'
+        },
+        config: {
+          type: 'object',
+          description: '可选模块配置；在线答题可传 questionMode/timeMode/timeLimit/rules 以做组合校验'
+        }
+      },
+      required: ['guids', 'targetModuleType'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_question_solutions',
+    description: '按 GUID 批量读取题目答案、解答和解析资源，供核对答案、反馈设计或创建答题类数字模块前检查。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guids: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: { type: 'string' }
+        },
+        includeRaw: { type: 'boolean', description: '是否附带接口原始数据，默认 false' }
+      },
+      required: ['guids'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_add_questions_to_catalog',
+    description: '把题目添加到指定书本目录并立即写入后端；validateOnly=true 只校验目标和题目，不写库。写入后无需 editor_save。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guids: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: { type: 'string' },
+          description: '要添加的题目 GUID'
+        },
+        bookId: { ...ID_SCHEMA, description: '书本 id；省略时使用当前书本' },
+        catalogId: { ...ID_SCHEMA, description: '目录 id；省略时使用当前目录' },
+        validateOnly: { type: 'boolean', description: '仅校验，不写库，默认 false' }
+      },
+      required: ['guids'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_remove_catalog_question',
+    description: '按目录资源映射的数值 id 删除一道已加入目录的题目并立即写库。resourceMappingId 不是题目 GUID。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resourceMappingId: {
+          type: 'integer',
+          minimum: 1,
+          description: '目录题目资源映射的正整数 id（搜索 currentCatalog/currentBookResources 的结果中获取）'
+        }
+      },
+      required: ['resourceMappingId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_move_catalog_question',
+    description: '按目录资源映射 id 调整题目在目录中的顺序并立即写库。toIndex 使用从 0 开始的目标下标。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resourceMappingId: {
+          type: 'integer',
+          minimum: 1,
+          description: '目录题目资源映射的正整数 id，不是题目 GUID'
+        },
+        toIndex: { type: 'integer', minimum: 0, description: '从 0 开始的目标下标' }
+      },
+      required: ['resourceMappingId', 'toIndex'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_question_explanations',
+    description: '按题目 GUID 读取已保存的 AI 讲解记录。返回的讲解记录 id 可用于数字模块 94 的 explain_ids，不能用题目 GUID 代替。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guids: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: { type: 'string' }
+        },
+        includeRaw: { type: 'boolean', description: '是否附带接口原始数据，默认 false' }
+      },
+      required: ['guids'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_start_question_explanation_generation',
+    description: '为一批题目启动 AI 讲解生成并立即返回任务信息；不会在 MCP 内长轮询。随后用 editor_get_question_explanation_status 查询。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guids: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: { type: 'string' }
+        },
+        bookId: { ...ID_SCHEMA, description: '书本 id；省略时使用当前书本' }
+      },
+      required: ['guids'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_get_question_explanation_status',
+    description: '查询题目 AI 讲解生成状态；includeResults=true 时对已完成题目一并读取讲解结果。单次查询，不在工具内等待或轮询。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guids: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: { type: 'string' }
+        },
+        bookId: { ...ID_SCHEMA, description: '书本 id；省略时使用当前书本' },
+        includeResults: { type: 'boolean', description: '已完成时是否附带讲解记录，默认 false' }
+      },
+      required: ['guids'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_save_question_explanation',
+    description: '新增或更新一道题的 AI 讲解并立即写库；更新时传现有讲解记录 id。content 使用 HTML、Markdown 或纯文本字符串。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        questionGuid: { type: 'string', description: '题目 GUID' },
+        content: { type: 'string', minLength: 1, description: 'HTML、Markdown 或纯文本讲解内容' },
+        id: {
+          type: 'integer',
+          minimum: 1,
+          description: '已有讲解记录的正整数 id；省略时新增'
+        }
+      },
+      required: ['questionGuid', 'content'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_delete_question_explanation',
+    description: '按讲解记录 id 删除已保存的 AI 讲解并立即写库。explanationId 不是题目 GUID。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        explanationId: {
+          type: 'integer',
+          minimum: 1,
+          description: 'AI 讲解记录的正整数 id，不是题目 GUID'
+        }
+      },
+      required: ['explanationId'],
+      additionalProperties: false
+    }
+  },
 
   {
     name: 'editor_get_state',
@@ -307,7 +888,7 @@ const TOOLS = [
   },
   {
     name: 'editor_update_element',
-    description: '修改元素属性（patch 合并进元素数据）。',
+    description: '修改元素通用属性（patch 合并）。文本元素的 geometry、默认样式等仍可修改，但 content/hyperlinkParamList/字数统计字段会拒绝并要求使用 editor_text_* 专用工具。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -685,26 +1266,33 @@ const TOOLS = [
   },
   {
     name: 'editor_text_info',
-    description: '读取文本元素结构：内容（HTML/纯文本）、字数、字体样式、行高/字距、背景类型与 extendType 自适应模式、maxWidth/maxHeight、内边距、几何尺寸、groupId。改文本前先读它（判断自适应模式与尺寸约束）。',
+    description: '读取普通文本元素、表格单元格或思维导图节点的富文本摘要。传统一 target，或用 legacy elementId 读取普通文本元素；嵌套目标不提供独立文本框布局。',
     inputSchema: {
       type: 'object',
-      properties: { elementId: { type: 'string', description: '文本元素 id' } },
-      required: ['elementId'],
+      properties: { ...TEXT_TARGET_PROPERTIES },
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
       additionalProperties: false
     }
   },
   {
     name: 'editor_text_set_content',
-    description: '修改文本内容并（默认）触发宽高自适应重算：fitSize=true 时按 background.extendType（both/horizontal/vertical）自动调整宽高并联动同组元素位移，返回新尺寸与受影响元素列表。纯文本自动包 <p>，\n 自动拆成多段。',
+    description: '整段替换文本内容。纯文本自动包 <p>，换行自动拆段；expectedContentHash 防并发覆盖，dryRun 只预览。实际写入且 fitSize=true 时按 background.extendType 重算宽高并联动同组元素。局部修改优先用 editor_text_edit。',
     inputSchema: {
       type: 'object',
       properties: {
-        elementId: { type: 'string' },
+        ...TEXT_TARGET_PROPERTIES,
         content: { type: 'string', description: '新内容（HTML 或纯文本）' },
+        expectedContentHash: {
+          type: 'string',
+          minLength: 1,
+          description: '最近一次 editor_text_document 返回的 contentHash，用于防止整段覆盖并发修改'
+        },
+        dryRun: { type: 'boolean', description: '只返回规范化内容和新 hash，不修改元素' },
         fitSize: { type: 'boolean', description: '是否触发自适应重算，默认 true' },
-        waitMs: { type: 'number', description: '自适应等待上限（毫秒），默认 2000' }
+        waitMs: TEXT_WAIT_SCHEMA
       },
-      required: ['elementId', 'content'],
+      required: ['content'],
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
       additionalProperties: false
     }
   },
@@ -716,7 +1304,8 @@ const TOOLS = [
       properties: {
         elementId: { type: 'string' },
         extendType: { type: 'string', enum: ['both', 'horizontal', 'vertical', 'none'] },
-        fitSize: { type: 'boolean', description: '切换后是否触发重算，默认 true' }
+        fitSize: { type: 'boolean', description: '切换后是否触发重算，默认 true' },
+        waitMs: TEXT_WAIT_SCHEMA
       },
       required: ['elementId', 'extendType'],
       additionalProperties: false
@@ -724,14 +1313,434 @@ const TOOLS = [
   },
   {
     name: 'editor_text_fit',
-    description: '强制重测文本元素尺寸（重新按当前内容与 extendType 计算宽高并联动同组元素）。内容未变但尺寸异常、或外部改了字体/样式后想重新适应时使用。',
+    description: '强制重测文本元素尺寸（重新按当前内容与 extendType 计算宽高并联动同组元素）。内容未变但尺寸异常、或外部改了字体/样式后想重新适应时使用；不修改正文，不接受 expectedContentHash 或 dryRun。',
     inputSchema: {
       type: 'object',
       properties: {
         elementId: { type: 'string' },
-        waitMs: { type: 'number', description: '自适应等待上限（毫秒），默认 2000' }
+        waitMs: TEXT_WAIT_SCHEMA
       },
       required: ['elementId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_document',
+    description: '结构化读取普通文本元素、表格单元格或思维导图节点。plainText/displayText 会展开拼音 word；indexText、paragraphs/runs/embeds 和 displayIndexMap 保留稳定 Quill 索引。传统一 target，或用 legacy elementId 读取普通文本元素。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...TEXT_TARGET_PROPERTIES,
+        includeHtml: { type: 'boolean', description: '是否附带规范化 HTML，默认 true' },
+        includeRuns: { type: 'boolean', description: '是否附带字符样式 runs，默认 true' },
+        includeParagraphs: { type: 'boolean', description: '是否附带段落结构，默认 true' },
+        includeEmbeds: { type: 'boolean', description: '是否附带公式、图片、拼音等内嵌对象，默认 true' }
+      },
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_set_style',
+    description: '设置富文本目标的默认字体与基础样式。支持普通文本元素、表格单元格和思维导图节点；只影响默认样式，已有内联 run 应使用 editor_text_format。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...TEXT_TARGET_PROPERTIES,
+        style: {
+          type: 'object',
+          properties: TEXT_DEFAULT_STYLE_PROPERTIES,
+          minProperties: 1,
+          additionalProperties: false
+        },
+        expectedContentHash: {
+          type: 'string',
+          minLength: 1,
+          description: '最近一次 editor_text_document 返回的 contentHash，用于防止并发覆盖'
+        },
+        fitSize: { type: 'boolean', description: '样式变化后是否重测尺寸，默认 true' },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      required: ['style'],
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_edit',
+    description: '保留未修改区域格式地插入、替换、删除或查找替换文本。insert/replace/delete 使用 UTF-16 index（replace/delete 还需 length）；仅 findReplace 使用 match+occurrence，省略 text/html 时删除匹配。expectedContentHash 同时保护正文和超链接元数据，dryRun 只预览。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...TEXT_TARGET_PROPERTIES,
+        action: { type: 'string', enum: ['insert', 'replace', 'delete', 'findReplace'] },
+        index: TEXT_INDEX_SCHEMA,
+        length: { type: 'integer', minimum: 0 },
+        text: { type: 'string', description: '插入或替换的纯文本' },
+        html: { type: 'string', description: '插入或替换的富文本 HTML；与 text 二选一' },
+        match: { type: 'string', minLength: 1, description: '按纯文本匹配定位' },
+        occurrence: { type: 'integer', minimum: 1, description: '第几个匹配，默认 1' },
+        caseSensitive: { type: 'boolean' },
+        replaceAll: { type: 'boolean', description: 'findReplace 是否替换全部命中' },
+        expectedContentHash: { type: 'string', minLength: 1 },
+        dryRun: { type: 'boolean' },
+        fitSize: { type: 'boolean', description: '写入后是否重测文本框，默认 true' },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      required: ['action'],
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
+      allOf: [
+        {
+          if: { properties: { action: { const: 'insert' } } },
+          then: {
+            required: ['index'],
+            oneOf: [{ required: ['text'] }, { required: ['html'] }]
+          }
+        },
+        {
+          if: { properties: { action: { const: 'replace' } } },
+          then: {
+            required: ['index', 'length'],
+            oneOf: [{ required: ['text'] }, { required: ['html'] }]
+          }
+        },
+        {
+          if: { properties: { action: { const: 'delete' } } },
+          then: { required: ['index', 'length'] }
+        },
+        {
+          if: { properties: { action: { const: 'findReplace' } } },
+          then: { required: ['match'] }
+        }
+      ],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_set_link',
+    description: '原子地给文本范围设置超链接，并同步 hyperlinkParamList。复用已有 hyperlinkId 时元数据可省略；新链接必须提供 hyperlink 元数据，但 hyperlink_id 可省略并由 Bridge 生成，后续以返回的 hyperlinkId 为准。Bridge 不会猜测跳转参数。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...TEXT_TARGET_PROPERTIES,
+        index: TEXT_INDEX_SCHEMA,
+        length: { type: 'integer', minimum: 1 },
+        hyperlinkId: { type: 'string', minLength: 1 },
+        hyperlink: {
+          type: 'object',
+          minProperties: 1,
+          properties: {
+            hyperlink_id: { type: ['string', 'number'] },
+            input_type: { type: 'number', enum: [1, 2] },
+            link_mode: { type: 'number', enum: [1, 2] },
+            jump_type: { type: 'number', enum: [1, 2] },
+            link_address: { type: 'string' },
+            agent_id: { type: ['string', 'number'] },
+            agent_params: { type: 'array' }
+          },
+          required: ['input_type', 'link_mode', 'jump_type'],
+          allOf: [
+            {
+              if: { properties: { jump_type: { const: 1 } } },
+              then: { required: ['link_address'] }
+            },
+            {
+              if: { properties: { jump_type: { const: 2 } } },
+              then: { required: ['agent_id', 'agent_params'] }
+            }
+          ],
+          description: 'HyperlinkTooltip 的真实元数据。URL 使用 jump_type=1 + link_address；智能体使用 jump_type=2 + 真实 agent_id/agent_params。优先复用 document.hyperlinks[].metadata。',
+          additionalProperties: true
+        },
+        expectedContentHash: { type: 'string', minLength: 1 },
+        dryRun: { type: 'boolean' },
+        fitSize: { type: 'boolean' },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      required: ['index', 'length'],
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
+      anyOf: [{ required: ['hyperlinkId'] }, { required: ['hyperlink'] }],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_remove_link',
+    description: '原子地按 hyperlinkId 或 UTF-16 index+length 移除文本超链接，并清理不再被正文引用的 hyperlinkParamList 元数据。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...TEXT_TARGET_PROPERTIES,
+        index: TEXT_INDEX_SCHEMA,
+        length: { type: 'integer', minimum: 1 },
+        hyperlinkId: { type: 'string', minLength: 1 },
+        expectedContentHash: { type: 'string', minLength: 1 },
+        dryRun: { type: 'boolean' },
+        fitSize: { type: 'boolean' },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
+      anyOf: [
+        { required: ['hyperlinkId'] },
+        { required: ['index', 'length'] }
+      ],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_edit_embed',
+    description: '按 UTF-16 索引原子插入、更新或删除公式、拼音和内嵌图片。自定义 blot 未注册时 Bridge 会阻止写入，避免富文本结构丢失。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...TEXT_TARGET_PROPERTIES,
+        action: { type: 'string', enum: ['insert', 'update', 'delete'] },
+        index: TEXT_INDEX_SCHEMA,
+        embedType: {
+          type: 'string',
+          enum: ['formulaMath', 'pinyinBox', 'image']
+        },
+        value: {
+          type: ['string', 'object'],
+          properties: {
+            latex: { type: 'string' },
+            pinyin: { type: 'string' },
+            word: { type: 'string' },
+            url: { type: 'string' },
+            width: { type: 'number' },
+            height: { type: 'number' },
+            originalWidth: { type: 'number' },
+            originalHeight: { type: 'number' },
+            rotate: { type: 'number' },
+            opacity: { type: 'number' },
+            flip: { type: ['number', 'boolean'] },
+            outlineWidth: { type: 'number' },
+            outlineColor: { type: 'string' },
+            outlineStyle: { type: 'string' },
+            verticalAlign: { type: 'string' },
+            offsetX: { type: 'number' },
+            offsetY: { type: 'number' }
+          },
+          additionalProperties: true,
+          description: 'insert: formulaMath 为 LaTeX/{latex}，pinyinBox 为 {pinyin,word}（word 单汉字），image 为完整 ImageBot 值；update 可传部分对象并与当前 embed value 合并'
+        },
+        expectedContentHash: { type: 'string', minLength: 1 },
+        dryRun: { type: 'boolean' },
+        fitSize: { type: 'boolean' },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      required: ['action', 'index'],
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
+      allOf: [
+        {
+          if: { properties: { action: { const: 'insert' } } },
+          then: { required: ['embedType', 'value'] }
+        },
+        {
+          if: { properties: { action: { const: 'update' } } },
+          then: { required: ['value'] }
+        },
+        {
+          if: {
+            properties: {
+              action: { const: 'insert' },
+              embedType: { const: 'pinyinBox' }
+            }
+          },
+          then: {
+            properties: {
+              value: {
+                type: 'object',
+                required: ['pinyin', 'word']
+              }
+            }
+          }
+        },
+        {
+          if: {
+            properties: {
+              action: { const: 'insert' },
+              embedType: { const: 'image' }
+            }
+          },
+          then: {
+            properties: {
+              value: {
+                oneOf: [
+                  { type: 'string', minLength: 1 },
+                  { type: 'object', required: ['url'] }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_format',
+    description: '按默认样式、全文、字符范围、文字匹配或 0-based 段落下标应用富文本格式。覆盖常用字符样式、段落对齐/间距/缩进和列表；支持 expectedContentHash 并发保护和 dryRun 预览，不依赖当前光标或选区。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...TEXT_TARGET_PROPERTIES,
+        scope: { type: 'string', enum: ['default', 'all', 'range', 'match', 'paragraph'] },
+        index: TEXT_INDEX_SCHEMA,
+        length: { type: 'integer', minimum: 0 },
+        match: { type: 'string', minLength: 1 },
+        occurrence: { type: 'integer', minimum: 1 },
+        caseSensitive: { type: 'boolean' },
+        paragraphIndexes: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 200,
+          items: { type: 'integer', minimum: 0 },
+          description: '0-based 段落下标；必须来自 editor_text_document.paragraphs[].index'
+        },
+        formats: {
+          type: 'object',
+          properties: TEXT_FORMAT_PROPERTIES,
+          minProperties: 1,
+          additionalProperties: false
+        },
+        expectedContentHash: {
+          type: 'string',
+          minLength: 1,
+          description: '最近一次 editor_text_document 返回的 contentHash，用于防止并发覆盖'
+        },
+        dryRun: { type: 'boolean' },
+        fitSize: { type: 'boolean', description: '格式改变后是否重测文本框，默认 true' },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      required: ['scope', 'formats'],
+      ...TEXT_TARGET_SELECTOR_SCHEMA,
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_set_layout',
+    description: '类型安全地设置文本框布局与外观，嵌套 background/outline/shadow 会基于旧值深合并；可设置自适应、最大宽高、padding、横竖排、对齐和溢出策略。该工具不修改正文，不接受 expectedContentHash 或 dryRun。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', minLength: 1 },
+        layout: {
+          type: 'object',
+          properties: TEXT_LAYOUT_PROPERTIES,
+          minProperties: 1,
+          additionalProperties: false
+        },
+        fitSize: { type: 'boolean', description: '修改后是否重测尺寸，默认 true' },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      required: ['elementId', 'layout'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_inspect_layout',
+    description: '检查文本框内容、约束和渲染稳定状态，报告潜在溢出、裁切、字号异常、尺寸上限命中及 needResetSize 等诊断信息。',
+    inputSchema: {
+      type: 'object',
+      properties: { elementId: { type: 'string', minLength: 1 } },
+      required: ['elementId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_fit_to_box',
+    description: '保持文本框宽高不变，在给定字号范围内逐步缩小字号直到内容尽量放入；支持 expectedContentHash，但不支持 dryRun。检测到混合或不可解析字号时默认零写入返回 mixed-font-sizes，只有用户明确同意后才传 allowUniformizeMixedSizes=true 统一字号。与 editor_text_fit 的“让框适应内容”语义不同。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', minLength: 1 },
+        minFontSize: { type: 'number', minimum: 1, maximum: 200 },
+        maxFontSize: { type: 'number', minimum: 1, maximum: 200 },
+        step: { type: 'number', exclusiveMinimum: 0, maximum: 20 },
+        expectedContentHash: {
+          type: 'string',
+          minLength: 1,
+          description: '最近一次 editor_text_document 返回的联合 contentHash，用于防止字号写入覆盖并发内容修改'
+        },
+        allowUniformizeMixedSizes: {
+          type: 'boolean',
+          description: '仅在用户明确同意把混合字号统一为单一字号时传 true；默认 false 并零写入'
+        },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      required: ['elementId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_search',
+    description: '在当前已加载目录中搜索可见文本（含拼音 word），默认同时搜索普通文本元素、表格单元格和思维导图节点；返回统一 target、可写入的 Quill index/length、上下文和 contentHash。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', minLength: 1 },
+        blockId: { type: 'string' },
+        caseSensitive: { type: 'boolean' },
+        wholeWord: { type: 'boolean' },
+        useRegex: { type: 'boolean' },
+        targetKinds: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: 'string', enum: TEXT_TARGET_KINDS },
+          default: TEXT_TARGET_KINDS,
+          description: '要搜索的目标类型；默认 element、tableCell、mindNode 三类'
+        },
+        limit: { type: 'integer', minimum: 1, maximum: 500 }
+      },
+      required: ['query'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_copy_style',
+    description: '把参考富文本目标的默认、字符或段落样式复制到多个目标。支持 legacy sourceElementId/targetElementIds 和统一 sourceTarget/targetTargets；layout/all 包含独立文本框布局，只支持普通文本元素。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourceElementId: { type: 'string', minLength: 1 },
+        sourceTarget: TEXT_TARGET_SCHEMA,
+        targetElementIds: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 200,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1 }
+        },
+        targetTargets: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 200,
+          items: TEXT_TARGET_SCHEMA,
+          description: '统一富文本目标列表；与 legacy targetElementIds 二选一'
+        },
+        scope: {
+          type: 'string',
+          enum: ['default', 'character', 'paragraph', 'layout', 'all']
+        },
+        fitSize: { type: 'boolean' },
+        waitMs: TEXT_WAIT_SCHEMA
+      },
+      allOf: [
+        { oneOf: [{ required: ['sourceElementId'] }, { required: ['sourceTarget'] }] },
+        { oneOf: [{ required: ['targetElementIds'] }, { required: ['targetTargets'] }] }
+      ],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_text_fonts',
+    description: '列出当前书本/编辑器可使用的文本字体及语言适用范围，避免写入不可用字体。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        language: { type: 'string', enum: ['all', 'chinese', 'english', 'number'] }
+      },
       additionalProperties: false
     }
   },
@@ -981,7 +1990,628 @@ class McpError extends Error {
   }
 }
 
+async function prepareDigitalModuleArgs(args = {}) {
+  const prepared = { ...args }
+  if (prepared.validateOnly && prepared.mediaPath) {
+    throw new Error(
+      'validateOnly 不能与 mediaPath 同时使用：请先调用 editor_upload_file，' +
+        '或在 config 中传已有 URL/metadata 后再校验'
+    )
+  }
+  if (prepared.mediaPath) {
+    const uploadedFile = await driver.uploadFile({
+      filePath: prepared.mediaPath,
+      fileName: prepared.mediaFileName,
+      mimeType: prepared.mediaMimeType
+    })
+    prepared.config = {
+      ...(prepared.config && typeof prepared.config === 'object' ? prepared.config : {}),
+      uploadedFile
+    }
+  }
+  delete prepared.mediaPath
+  delete prepared.mediaFileName
+  delete prepared.mediaMimeType
+  return prepared
+}
+
+const QUESTION_GUID_TOOLS = new Set([
+  'editor_get_questions',
+  'editor_validate_question_selection',
+  'editor_get_question_solutions',
+  'editor_add_questions_to_catalog',
+  'editor_get_question_explanations',
+  'editor_start_question_explanation_generation',
+  'editor_get_question_explanation_status'
+])
+
+function requirePositiveInteger(value, name) {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} 必须是正整数`)
+  }
+}
+
+function validateQuestionToolArgs(name, args = {}) {
+  if (QUESTION_GUID_TOOLS.has(name)) {
+    if (!Array.isArray(args.guids) || !args.guids.length) {
+      throw new Error('guids 必须是非空数组')
+    }
+    if (args.guids.length > 50) throw new Error('单次最多处理 50 个题目 GUID')
+    const meaningfulGuids = args.guids
+      .map((guid) => String(guid === undefined || guid === null ? '' : guid).trim())
+      .filter(Boolean)
+    if (!meaningfulGuids.length) throw new Error('guids 必须至少包含一个非空题目 GUID')
+  }
+  if (['editor_remove_catalog_question', 'editor_move_catalog_question'].includes(name)) {
+    requirePositiveInteger(args.resourceMappingId, 'resourceMappingId')
+  }
+  if (name === 'editor_move_catalog_question') {
+    if (!Number.isInteger(args.toIndex) || args.toIndex < 0) {
+      throw new Error('toIndex 必须是大于等于 0 的整数')
+    }
+  }
+  if (name === 'editor_save_question_explanation') {
+    if (typeof args.questionGuid !== 'string' || !args.questionGuid.trim()) {
+      throw new Error('questionGuid 不能为空')
+    }
+    if (typeof args.content !== 'string' || !args.content.trim()) {
+      throw new Error('content 不能为空')
+    }
+    if (args.id !== undefined && args.id !== null) requirePositiveInteger(args.id, 'id')
+  }
+  if (name === 'editor_delete_question_explanation') {
+    requirePositiveInteger(args.explanationId, 'explanationId')
+  }
+}
+
+const TEXT_CONTENT_TARGET_TOOLS = new Set([
+  'editor_text_info',
+  'editor_text_set_content',
+  'editor_text_document',
+  'editor_text_set_style',
+  'editor_text_edit',
+  'editor_text_set_link',
+  'editor_text_remove_link',
+  'editor_text_edit_embed',
+  'editor_text_format'
+])
+
+const TEXT_LAYOUT_ELEMENT_TOOLS = new Set([
+  'editor_text_adaptive',
+  'editor_text_fit',
+  'editor_text_set_layout',
+  'editor_text_inspect_layout',
+  'editor_text_fit_to_box'
+])
+
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value || {}, key)
+}
+
+function requireNonEmptyString(value, name) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} 不能为空`)
+}
+
+function requireTextTargetId(value, name) {
+  const validNumber = typeof value === 'number' && Number.isFinite(value)
+  const validString = typeof value === 'string' && !!value.trim()
+  if (!validNumber && !validString) throw new Error(`${name} 不能为空`)
+}
+
+function validateTextTarget(target, name = 'target') {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) {
+    throw new Error(`${name} 必须是对象`)
+  }
+  if (!TEXT_TARGET_KINDS.includes(target.kind)) {
+    throw new Error(`${name}.kind 取值: ${TEXT_TARGET_KINDS.join(' / ')}`)
+  }
+  const allowedKeys = {
+    element: ['kind', 'elementId'],
+    tableCell: ['kind', 'tableId', 'cellId', 'row', 'col'],
+    mindNode: ['kind', 'mindId', 'nodeId']
+  }
+  const unknownKeys = Object.keys(target).filter((key) => !allowedKeys[target.kind].includes(key))
+  if (unknownKeys.length) {
+    throw new Error(`${name} 包含不支持的字段: ${unknownKeys.join(', ')}`)
+  }
+  if (target.kind === 'element') {
+    requireTextTargetId(target.elementId, `${name}.elementId`)
+    return
+  }
+  if (target.kind === 'mindNode') {
+    requireTextTargetId(target.mindId, `${name}.mindId`)
+    requireTextTargetId(target.nodeId, `${name}.nodeId`)
+    return
+  }
+  requireTextTargetId(target.tableId, `${name}.tableId`)
+  const hasCellId = hasOwn(target, 'cellId') && target.cellId !== null && target.cellId !== ''
+  const hasRow = hasOwn(target, 'row')
+  const hasCol = hasOwn(target, 'col')
+  if (hasCellId) requireTextTargetId(target.cellId, `${name}.cellId`)
+  if (hasRow !== hasCol) throw new Error(`${name} 的 row 和 col 必须同时提供`)
+  if (hasRow && (!Number.isInteger(target.row) || target.row < 0)) {
+    throw new Error(`${name}.row 必须是非负整数`)
+  }
+  if (hasCol && (!Number.isInteger(target.col) || target.col < 0)) {
+    throw new Error(`${name}.col 必须是非负整数`)
+  }
+  if (!hasCellId && !hasRow) {
+    throw new Error(`${name} 需要 cellId，或同时提供 row + col`)
+  }
+}
+
+function validateTextTargetSelector(args, toolName) {
+  const hasElementId = hasOwn(args, 'elementId')
+  const hasTarget = hasOwn(args, 'target')
+  if (hasElementId === hasTarget) {
+    throw new Error(`${toolName} 必须且只能提供 legacy elementId 或统一 target 之一`)
+  }
+  if (hasElementId) requireNonEmptyString(args.elementId, 'elementId')
+  else validateTextTarget(args.target)
+}
+
+function validateTextToolArgs(name, args = {}) {
+  if (TEXT_CONTENT_TARGET_TOOLS.has(name)) validateTextTargetSelector(args, name)
+  if (TEXT_LAYOUT_ELEMENT_TOOLS.has(name)) {
+    if (hasOwn(args, 'target')) {
+      const error = new Error(
+        `${name} 只支持普通文本元素的 legacy elementId，不支持 tableCell 或 mindNode target`
+      )
+      error.code = 'TEXT_LAYOUT_TARGET_UNSUPPORTED'
+      throw error
+    }
+    requireNonEmptyString(args.elementId, 'elementId')
+  }
+  if (hasOwn(args, 'expectedContentHash')) {
+    requireNonEmptyString(args.expectedContentHash, 'expectedContentHash')
+  }
+  if (hasOwn(args, 'waitMs')) {
+    if (typeof args.waitMs !== 'number' || args.waitMs < 0 || args.waitMs > 10000) {
+      throw new Error('waitMs 必须是 0 到 10000 之间的数字')
+    }
+  }
+  if (['editor_text_set_layout', 'editor_text_fit'].includes(name)) {
+    for (const field of ['expectedContentHash', 'dryRun']) {
+      if (hasOwn(args, field)) {
+        throw new Error(`${name} 不修改文本内容，不支持 ${field}`)
+      }
+    }
+  }
+  if (name === 'editor_text_set_content' && typeof args.content !== 'string') {
+    throw new Error('content 必须是字符串')
+  }
+  if (name === 'editor_text_adaptive') {
+    const extendTypes = ['both', 'horizontal', 'vertical', 'none']
+    if (!extendTypes.includes(args.extendType)) {
+      throw new Error(`extendType 取值: ${extendTypes.join(' / ')}`)
+    }
+  }
+  if (name === 'editor_text_edit') {
+    const actions = ['insert', 'replace', 'delete', 'findReplace']
+    if (!actions.includes(args.action)) throw new Error(`action 取值: ${actions.join(' / ')}`)
+    const hasIndex = Number.isInteger(args.index) && args.index >= 0
+    const hasLength = Number.isInteger(args.length) && args.length >= 0
+    const hasMatch = typeof args.match === 'string' && args.match.length > 0
+    const hasText = hasOwn(args, 'text')
+    const hasHtml = hasOwn(args, 'html')
+    const hasReplacement = hasText || hasHtml
+    if (hasText && typeof args.text !== 'string') throw new Error('text 必须是字符串')
+    if (hasHtml && typeof args.html !== 'string') throw new Error('html 必须是字符串')
+    if (hasText && hasHtml) throw new Error('text 与 html 只能提供一个')
+    if (args.action !== 'findReplace' && hasOwn(args, 'match')) {
+      throw new Error('只有 findReplace 可以提供 match')
+    }
+    if (
+      args.action !== 'findReplace' &&
+      (hasOwn(args, 'occurrence') || hasOwn(args, 'replaceAll') || hasOwn(args, 'caseSensitive'))
+    ) {
+      throw new Error('occurrence / replaceAll / caseSensitive 仅适用于 findReplace')
+    }
+    if (args.action === 'findReplace' && (hasOwn(args, 'index') || hasOwn(args, 'length'))) {
+      throw new Error('findReplace 使用 match 定位，不应提供 index 或 length')
+    }
+    if (args.action === 'insert') {
+      if (!hasIndex) throw new Error('insert 必须提供非负整数 index')
+      if (!hasReplacement) throw new Error('insert 必须提供 text 或 html')
+    }
+    if (args.action === 'replace') {
+      if (!hasIndex || !hasLength) throw new Error('replace 必须提供非负整数 index 和 length')
+      if (!hasReplacement) throw new Error('replace 必须提供 text 或 html')
+    }
+    if (args.action === 'delete') {
+      if (!hasIndex || !hasLength) throw new Error('delete 必须提供非负整数 index 和 length')
+      if (hasReplacement) throw new Error('delete 不应提供 text 或 html')
+    }
+    if (args.action === 'findReplace' && !hasMatch) {
+      throw new Error('findReplace 必须提供非空 match；省略 text/html 时删除匹配')
+    }
+    if (hasOwn(args, 'length') && (!Number.isInteger(args.length) || args.length < 0)) {
+      throw new Error('length 必须是非负整数')
+    }
+    if (hasOwn(args, 'occurrence') && (!Number.isInteger(args.occurrence) || args.occurrence < 1)) {
+      throw new Error('occurrence 必须是正整数')
+    }
+  }
+  if (name === 'editor_text_set_link') {
+    if (!Number.isInteger(args.index) || args.index < 0) {
+      throw new Error('index 必须是非负整数')
+    }
+    if (!Number.isInteger(args.length) || args.length <= 0) {
+      throw new Error('length 必须是正整数')
+    }
+    const hasHyperlinkId = typeof args.hyperlinkId === 'string' && !!args.hyperlinkId.trim()
+    const hasHyperlink =
+      !!args.hyperlink &&
+      typeof args.hyperlink === 'object' &&
+      !Array.isArray(args.hyperlink) &&
+      Object.keys(args.hyperlink).length > 0
+    if (hasOwn(args, 'hyperlinkId') && !hasHyperlinkId) {
+      throw new Error('hyperlinkId 不能为空')
+    }
+    if (hasOwn(args, 'hyperlink') && !hasHyperlink) {
+      throw new Error('hyperlink 必须是非空对象')
+    }
+    if (hasHyperlink) {
+      const metadata = args.hyperlink
+      for (const key of ['input_type', 'link_mode', 'jump_type']) {
+        if (![1, 2].includes(metadata[key])) {
+          throw new Error(`hyperlink.${key} 取值只能是 1 或 2`)
+        }
+      }
+      if (metadata.jump_type === 1) {
+        requireNonEmptyString(metadata.link_address, 'hyperlink.link_address')
+      }
+      if (metadata.jump_type === 2) {
+        const validAgentId =
+          (typeof metadata.agent_id === 'number' && metadata.agent_id > 0) ||
+          (typeof metadata.agent_id === 'string' &&
+            !!metadata.agent_id.trim() &&
+            metadata.agent_id.trim() !== '0')
+        if (!validAgentId) throw new Error('智能体链接必须提供真实 hyperlink.agent_id')
+        if (!Array.isArray(metadata.agent_params)) {
+          throw new Error('智能体链接必须提供 hyperlink.agent_params 数组')
+        }
+      }
+    }
+    if (!hasHyperlinkId && !hasHyperlink) {
+      throw new Error('必须提供 hyperlinkId；新链接没有既有 id 时必须提供 hyperlink 元数据')
+    }
+  }
+  if (name === 'editor_text_remove_link') {
+    const hasHyperlinkId = typeof args.hyperlinkId === 'string' && !!args.hyperlinkId.trim()
+    const hasIndex = Number.isInteger(args.index) && args.index >= 0
+    const hasLength = Number.isInteger(args.length) && args.length > 0
+    if (hasOwn(args, 'hyperlinkId') && !hasHyperlinkId) {
+      throw new Error('hyperlinkId 不能为空')
+    }
+    if (hasOwn(args, 'index') && !hasIndex) throw new Error('index 必须是非负整数')
+    if (hasOwn(args, 'length') && !hasLength) throw new Error('length 必须是正整数')
+    if (hasIndex !== hasLength) throw new Error('按范围移除超链接时必须同时提供 index 和 length')
+    if (!hasHyperlinkId && !hasIndex) {
+      throw new Error('必须提供 hyperlinkId 或完整的 index + length')
+    }
+  }
+  if (name === 'editor_text_edit_embed') {
+    const actions = ['insert', 'update', 'delete']
+    const embedTypes = ['formulaMath', 'pinyinBox', 'image']
+    if (!actions.includes(args.action)) throw new Error(`action 取值: ${actions.join(' / ')}`)
+    if (!Number.isInteger(args.index) || args.index < 0) {
+      throw new Error('index 必须是非负整数')
+    }
+    if (hasOwn(args, 'embedType') && !embedTypes.includes(args.embedType)) {
+      throw new Error(`embedType 取值: ${embedTypes.join(' / ')}`)
+    }
+    if (args.action === 'insert' && !embedTypes.includes(args.embedType)) {
+      throw new Error('insert 必须提供 embedType')
+    }
+    if (['insert', 'update'].includes(args.action) && !hasOwn(args, 'value')) {
+      throw new Error(`${args.action} 必须提供 value`)
+    }
+    if (args.action === 'delete' && hasOwn(args, 'value')) {
+      throw new Error('delete 不应提供 value')
+    }
+    if (hasOwn(args, 'value')) {
+      const validContainer =
+        typeof args.value === 'string' ||
+        (!!args.value && typeof args.value === 'object' && !Array.isArray(args.value))
+      if (!validContainer) throw new Error('value 必须是字符串或对象')
+      if (
+        typeof args.value === 'object' &&
+        !Array.isArray(args.value) &&
+        !Object.keys(args.value).length
+      ) {
+        throw new Error('value 对象不能为空')
+      }
+    }
+    if (args.embedType === 'formulaMath' && hasOwn(args, 'value')) {
+      const latex = typeof args.value === 'string' ? args.value : args.value && args.value.latex
+      if (typeof latex !== 'string' || !latex.trim()) {
+        throw new Error('formulaMath value 必须是非空 LaTeX 字符串或 { latex }')
+      }
+    }
+    if (args.embedType === 'pinyinBox' && hasOwn(args, 'value')) {
+      if (
+        !args.value ||
+        typeof args.value !== 'object' ||
+        Array.isArray(args.value)
+      ) {
+        throw new Error('pinyinBox value 必须是对象')
+      }
+      if (args.action === 'insert') {
+        if (
+          typeof args.value.pinyin !== 'string' ||
+          !args.value.pinyin.trim() ||
+          typeof args.value.word !== 'string' ||
+          !/^\p{Script=Han}$/u.test(args.value.word.trim())
+        ) {
+          throw new Error('插入 pinyinBox 必须提供非空 pinyin 和单个中文字符 word')
+        }
+      } else {
+        if (
+          hasOwn(args.value, 'pinyin') &&
+          (typeof args.value.pinyin !== 'string' || !args.value.pinyin.trim())
+        ) {
+          throw new Error('pinyinBox.pinyin 必须是非空字符串')
+        }
+        if (
+          hasOwn(args.value, 'word') &&
+          (typeof args.value.word !== 'string' ||
+            !/^\p{Script=Han}$/u.test(args.value.word.trim()))
+        ) {
+          throw new Error('pinyinBox.word 必须是单个中文字符')
+        }
+      }
+    }
+    if (args.embedType === 'image' && hasOwn(args, 'value')) {
+      const url = typeof args.value === 'string' ? args.value : args.value && args.value.url
+      if (args.value && typeof args.value === 'object' && !Array.isArray(args.value)) {
+        const imageFields = new Set([
+          'url',
+          'width',
+          'height',
+          'originalWidth',
+          'originalHeight',
+          'rotate',
+          'opacity',
+          'flip',
+          'outlineWidth',
+          'outlineColor',
+          'outlineStyle',
+          'verticalAlign',
+          'offsetX',
+          'offsetY'
+        ])
+        const unknownImageFields = Object.keys(args.value).filter((key) => !imageFields.has(key))
+        if (unknownImageFields.length) {
+          throw new Error(`不支持的 image value 字段: ${unknownImageFields.join(', ')}`)
+        }
+        for (const key of [
+          'width',
+          'height',
+          'originalWidth',
+          'originalHeight',
+          'rotate',
+          'opacity',
+          'outlineWidth',
+          'offsetX',
+          'offsetY'
+        ]) {
+          if (hasOwn(args.value, key) && !Number.isFinite(args.value[key])) {
+            throw new Error(`image.${key} 必须是有限数字`)
+          }
+        }
+        if (
+          hasOwn(args.value, 'flip') &&
+          typeof args.value.flip !== 'number' &&
+          typeof args.value.flip !== 'boolean'
+        ) {
+          throw new Error('image.flip 必须是数字或布尔值')
+        }
+        for (const key of ['outlineColor', 'outlineStyle', 'verticalAlign']) {
+          if (hasOwn(args.value, key) && typeof args.value[key] !== 'string') {
+            throw new Error(`image.${key} 必须是字符串`)
+          }
+        }
+      }
+      if (args.action === 'insert' && (typeof url !== 'string' || !url.trim())) {
+        throw new Error('插入 image 的 value 必须是非空 URL 字符串或包含 url 的对象')
+      }
+      if (
+        args.action === 'update' &&
+        hasOwn(args.value, 'url') &&
+        (typeof args.value.url !== 'string' || !args.value.url.trim())
+      ) {
+        throw new Error('image.url 必须是非空字符串')
+      }
+    }
+  }
+  if (name === 'editor_text_format') {
+    const scopes = ['default', 'all', 'range', 'match', 'paragraph']
+    if (!scopes.includes(args.scope)) throw new Error(`scope 取值: ${scopes.join(' / ')}`)
+    if (!args.formats || typeof args.formats !== 'object' || !Object.keys(args.formats).length) {
+      throw new Error('formats 必须是非空对象')
+    }
+    const unknownFormats = Object.keys(args.formats).filter(
+      (key) => !Object.prototype.hasOwnProperty.call(TEXT_FORMAT_PROPERTIES, key)
+    )
+    if (unknownFormats.length) throw new Error(`不支持的 formats 字段: ${unknownFormats.join(', ')}`)
+    if (args.scope === 'range') {
+      if (!Number.isInteger(args.index) || args.index < 0) throw new Error('range 必须提供非负整数 index')
+      if (!Number.isInteger(args.length) || args.length < 0) throw new Error('range 必须提供非负整数 length')
+    }
+    if (args.scope === 'match') requireNonEmptyString(args.match, 'match')
+    if (args.scope === 'paragraph') {
+      if (!Array.isArray(args.paragraphIndexes) || !args.paragraphIndexes.length) {
+        throw new Error('paragraph 必须提供非空 paragraphIndexes')
+      }
+    }
+  }
+  if (name === 'editor_text_set_style') {
+    if (!args.style || typeof args.style !== 'object' || !Object.keys(args.style).length) {
+      throw new Error('style 必须是非空对象')
+    }
+    const unknownStyle = Object.keys(args.style).filter(
+      (key) => !Object.prototype.hasOwnProperty.call(TEXT_DEFAULT_STYLE_PROPERTIES, key)
+    )
+    if (unknownStyle.length) throw new Error(`不支持的 style 字段: ${unknownStyle.join(', ')}`)
+  }
+  if (name === 'editor_text_set_layout') {
+    if (
+      !args.layout ||
+      typeof args.layout !== 'object' ||
+      Array.isArray(args.layout) ||
+      !Object.keys(args.layout).length
+    ) {
+      throw new Error('layout 必须是非空对象')
+    }
+    const unknownLayout = Object.keys(args.layout).filter(
+      (key) => !Object.prototype.hasOwnProperty.call(TEXT_LAYOUT_PROPERTIES, key)
+    )
+    if (unknownLayout.length) throw new Error(`不支持的 layout 字段: ${unknownLayout.join(', ')}`)
+    if (hasOwn(args.layout, 'fill')) {
+      const fill = args.layout.fill
+      if (fill === null) {
+        // Bridge 将 null 规范化为 isFill=false + fill=null，属于显式清空。
+      } else if (
+        !fill ||
+        typeof fill !== 'object' ||
+        Array.isArray(fill) ||
+        !Object.keys(fill).length
+      ) {
+        throw new Error('layout.fill 必须是包含 enabled 或 color 的非空对象')
+      } else {
+        const unknownFill = Object.keys(fill).filter((key) => !['enabled', 'color'].includes(key))
+        if (unknownFill.length) {
+          throw new Error(`不支持的 layout.fill 字段: ${unknownFill.join(', ')}`)
+        }
+        if (hasOwn(fill, 'enabled') && typeof fill.enabled !== 'boolean') {
+          throw new Error('layout.fill.enabled 必须是布尔值')
+        }
+        if (
+          hasOwn(fill, 'color') &&
+          fill.color !== null &&
+          typeof fill.color !== 'string'
+        ) {
+          throw new Error('layout.fill.color 必须是字符串或 null')
+        }
+      }
+    }
+    if (hasOwn(args.layout, 'overflowType')) {
+      const overflowType = args.layout.overflowType
+      const supportedOverflowTypes = ['auto', 'overWithBreak', 'overSizeScroll']
+      if (
+        overflowType !== null &&
+        (!Array.isArray(overflowType) ||
+          overflowType.some((value) => !supportedOverflowTypes.includes(value)) ||
+          new Set(overflowType).size !== overflowType.length)
+      ) {
+        throw new Error(
+          `layout.overflowType 必须是无重复的数组: ${supportedOverflowTypes.join(' / ')}，或 null`
+        )
+      }
+    }
+  }
+  if (name === 'editor_text_fit_to_box') {
+    if (hasOwn(args, 'dryRun')) {
+      throw new Error('editor_text_fit_to_box 不支持 dryRun；混合字号默认会零写入返回诊断')
+    }
+    if (
+      hasOwn(args, 'allowUniformizeMixedSizes') &&
+      typeof args.allowUniformizeMixedSizes !== 'boolean'
+    ) {
+      throw new Error('allowUniformizeMixedSizes 必须是布尔值')
+    }
+    if (
+      hasOwn(args, 'minFontSize') &&
+      hasOwn(args, 'maxFontSize') &&
+      args.minFontSize > args.maxFontSize
+    ) {
+      throw new Error('minFontSize 不能大于 maxFontSize')
+    }
+    if (hasOwn(args, 'step') && (typeof args.step !== 'number' || args.step <= 0)) {
+      throw new Error('step 必须是正数')
+    }
+  }
+  if (name === 'editor_text_search') {
+    requireNonEmptyString(args.query, 'query')
+    if (hasOwn(args, 'targetKinds')) {
+      if (!Array.isArray(args.targetKinds) || !args.targetKinds.length) {
+        throw new Error('targetKinds 必须是非空数组')
+      }
+      const invalidKind = args.targetKinds.find((kind) => !TEXT_TARGET_KINDS.includes(kind))
+      if (invalidKind) throw new Error(`targetKinds 取值: ${TEXT_TARGET_KINDS.join(' / ')}`)
+      if (new Set(args.targetKinds).size !== args.targetKinds.length) {
+        throw new Error('targetKinds 不能包含重复值')
+      }
+    }
+    if (args.useRegex) {
+      try {
+        new RegExp(args.query, args.caseSensitive ? 'g' : 'gi')
+      } catch (error) {
+        throw new Error(`query 不是有效正则: ${error.message}`)
+      }
+    }
+  }
+  if (name === 'editor_text_copy_style') {
+    const hasSourceElementId = hasOwn(args, 'sourceElementId')
+    const hasSourceTarget = hasOwn(args, 'sourceTarget')
+    if (hasSourceElementId === hasSourceTarget) {
+      throw new Error('必须且只能提供 sourceElementId 或 sourceTarget 之一')
+    }
+    if (hasSourceElementId) requireNonEmptyString(args.sourceElementId, 'sourceElementId')
+    else validateTextTarget(args.sourceTarget, 'sourceTarget')
+    const hasTargetElementIds = hasOwn(args, 'targetElementIds')
+    const hasTargetTargets = hasOwn(args, 'targetTargets')
+    if (hasTargetElementIds === hasTargetTargets) {
+      throw new Error('必须且只能提供 targetElementIds 或 targetTargets 之一')
+    }
+    if (hasTargetElementIds) {
+      if (!Array.isArray(args.targetElementIds) || !args.targetElementIds.length) {
+        throw new Error('targetElementIds 必须是非空数组')
+      }
+      args.targetElementIds.forEach((id) => requireNonEmptyString(id, 'targetElementIds[]'))
+    } else {
+      if (!Array.isArray(args.targetTargets) || !args.targetTargets.length) {
+        throw new Error('targetTargets 必须是非空数组')
+      }
+      args.targetTargets.forEach((target, index) =>
+        validateTextTarget(target, `targetTargets[${index}]`)
+      )
+    }
+    if (
+      hasOwn(args, 'scope') &&
+      !['default', 'character', 'paragraph', 'layout', 'all'].includes(args.scope)
+    ) {
+      throw new Error('scope 取值: default / character / paragraph / layout / all')
+    }
+    const scope = args.scope || 'default'
+    const nestedSource = hasSourceTarget && args.sourceTarget.kind !== 'element'
+    const nestedTarget =
+      hasTargetTargets && args.targetTargets.some((target) => target.kind !== 'element')
+    if ((scope === 'layout' || scope === 'all') && (nestedSource || nestedTarget)) {
+      const error = new Error(
+        'editor_text_copy_style 的 layout/all 只支持普通文本元素；嵌套目标请使用 default / character / paragraph'
+      )
+      error.code = 'TEXT_LAYOUT_TARGET_UNSUPPORTED'
+      throw error
+    }
+  }
+  if (
+    name === 'editor_text_fonts' &&
+    hasOwn(args, 'language') &&
+    !['all', 'chinese', 'english', 'number'].includes(args.language)
+  ) {
+    throw new Error('language 取值: all / chinese / english / number')
+  }
+}
+
+function getTextTargetSelector(args = {}) {
+  return hasOwn(args, 'target') ? { target: args.target } : { elementId: args.elementId }
+}
+
 async function callTool(name, args) {
+  validateQuestionToolArgs(name, args)
+  validateTextToolArgs(name, args)
   let data
   switch (name) {
     case 'editor_status': {
@@ -1037,6 +2667,72 @@ async function callTool(name, args) {
       break
     case 'editor_apply_image':
       data = await driver.bridgeCall('applyLibraryImage', [args])
+      break
+    case 'editor_upload_file':
+      data = await driver.uploadFile(args)
+      break
+    case 'editor_list_digital_module_types':
+      data = await driver.bridgeCall('listDigitalModuleTypes', [args])
+      break
+    case 'editor_get_digital_module':
+      data = await driver.bridgeCall('getDigitalModule', [args])
+      break
+    case 'editor_list_digital_modules':
+      data = await driver.bridgeCall('listDigitalModules', [args])
+      break
+    case 'editor_create_digital_module':
+      data = await driver.bridgeCall('createDigitalModule', [await prepareDigitalModuleArgs(args)])
+      break
+    case 'editor_update_digital_module':
+      data = await driver.bridgeCall('updateDigitalModule', [await prepareDigitalModuleArgs(args)])
+      break
+    case 'editor_delete_digital_module':
+      data = await driver.bridgeCall('deleteDigitalModule', [args])
+      break
+    case 'editor_copy_digital_module':
+      data = await driver.bridgeCall('copyDigitalModule', [args])
+      break
+    case 'editor_list_question_paths':
+      data = await driver.bridgeCall('listQuestionPaths', [args])
+      break
+    case 'editor_get_question_search_options':
+      data = await driver.bridgeCall('getQuestionSearchOptions', [args])
+      break
+    case 'editor_search_questions':
+      data = await driver.bridgeCall('searchQuestions', [args])
+      break
+    case 'editor_get_questions':
+      data = await driver.bridgeCall('getQuestions', [args])
+      break
+    case 'editor_validate_question_selection':
+      data = await driver.bridgeCall('validateQuestionSelection', [args])
+      break
+    case 'editor_get_question_solutions':
+      data = await driver.bridgeCall('getQuestionSolutions', [args])
+      break
+    case 'editor_add_questions_to_catalog':
+      data = await driver.bridgeCall('addQuestionsToCatalog', [args])
+      break
+    case 'editor_remove_catalog_question':
+      data = await driver.bridgeCall('removeCatalogQuestion', [args])
+      break
+    case 'editor_move_catalog_question':
+      data = await driver.bridgeCall('moveCatalogQuestion', [args])
+      break
+    case 'editor_get_question_explanations':
+      data = await driver.bridgeCall('getQuestionExplanations', [args])
+      break
+    case 'editor_start_question_explanation_generation':
+      data = await driver.bridgeCall('startQuestionExplanationGeneration', [args])
+      break
+    case 'editor_get_question_explanation_status':
+      data = await driver.bridgeCall('getQuestionExplanationStatus', [args])
+      break
+    case 'editor_save_question_explanation':
+      data = await driver.bridgeCall('saveQuestionExplanation', [args])
+      break
+    case 'editor_delete_question_explanation':
+      data = await driver.bridgeCall('deleteQuestionExplanation', [args])
       break
 
     case 'editor_get_state':
@@ -1226,20 +2922,95 @@ async function callTool(name, args) {
       break
     }
     case 'editor_text_info':
-      data = await driver.bridgeCall('getTextInfo', [{ elementId: args.elementId }])
+      data = await driver.bridgeCall('getTextInfo', [getTextTargetSelector(args)])
       break
     case 'editor_text_set_content':
       data = await driver.bridgeCall('setTextContent', [
-        { elementId: args.elementId, content: args.content, fitSize: args.fitSize, waitMs: args.waitMs }
+        {
+          ...getTextTargetSelector(args),
+          content: args.content,
+          expectedContentHash: args.expectedContentHash,
+          dryRun: args.dryRun,
+          fitSize: args.fitSize,
+          waitMs: args.waitMs
+        }
       ])
       break
     case 'editor_text_adaptive':
       data = await driver.bridgeCall('setTextAdaptive', [
-        { elementId: args.elementId, extendType: args.extendType, fitSize: args.fitSize }
+        {
+          elementId: args.elementId,
+          extendType: args.extendType,
+          fitSize: args.fitSize,
+          waitMs: args.waitMs
+        }
       ])
       break
     case 'editor_text_fit':
       data = await driver.bridgeCall('fitTextSize', [{ elementId: args.elementId, waitMs: args.waitMs }])
+      break
+    case 'editor_text_document':
+      data = await driver.bridgeCall('getTextDocument', [args])
+      break
+    case 'editor_text_set_style':
+      data = await driver.bridgeCall('formatText', [
+        {
+          ...getTextTargetSelector(args),
+          scope: 'default',
+          formats: args.style,
+          expectedContentHash: args.expectedContentHash,
+          fitSize: args.fitSize,
+          waitMs: args.waitMs
+        }
+      ])
+      break
+    case 'editor_text_edit':
+      data = await driver.bridgeCall('editText', [args])
+      break
+    case 'editor_text_set_link':
+      data = await driver.bridgeCall('setTextLink', [args])
+      break
+    case 'editor_text_remove_link':
+      data = await driver.bridgeCall('removeTextLink', [args])
+      break
+    case 'editor_text_edit_embed':
+      data = await driver.bridgeCall('editTextEmbed', [args])
+      break
+    case 'editor_text_format':
+      data = await driver.bridgeCall('formatText', [args])
+      break
+    case 'editor_text_set_layout':
+      data = await driver.bridgeCall('setTextLayout', [args])
+      break
+    case 'editor_text_inspect_layout':
+      data = await driver.bridgeCall('inspectTextLayout', [args])
+      break
+    case 'editor_text_fit_to_box':
+      data = await driver.bridgeCall('fitTextToBox', [
+        {
+          elementId: args.elementId,
+          minFontSize: args.minFontSize,
+          maxFontSize: args.maxFontSize,
+          step: args.step,
+          expectedContentHash: args.expectedContentHash,
+          allowUniformizeMixedSizes: args.allowUniformizeMixedSizes,
+          waitMs: args.waitMs
+        }
+      ])
+      break
+    case 'editor_text_search':
+      data = await driver.bridgeCall('searchTextElements', [
+        {
+          ...args,
+          targetKinds: args.targetKinds || TEXT_TARGET_KINDS
+        }
+      ])
+      break
+    case 'editor_text_copy_style':
+      data = await driver.bridgeCall('copyTextStyle', [args])
+      break
+    case 'editor_text_fonts':
+      data = await driver.bridgeCall('listTextFonts', [args])
       break
     case 'editor_outline_info':
       data = await driver.bridgeCall('getOutline', [args.slideId ? { slideId: args.slideId } : {}])

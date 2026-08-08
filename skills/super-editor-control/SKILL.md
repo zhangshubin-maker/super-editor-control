@@ -1,6 +1,6 @@
 ---
 name: super-editor-control
-description: 超媒内容编辑器（super-editor）总控技能。用户要求 Codex 控制超媒编辑器完成课页/课件的创建、编辑、修改、优化、审查询课内容，搜索/克隆创建/跳转书本，或自主利用样章模板、区块模板、组件库和图片库设计新目录时使用。负责建立连接、编排工作流，并按子任务加载书本、状态、素材、区块、元素、画布和大纲子技能。
+description: 超媒内容编辑器（super-editor）总控技能。用户要求 Codex 控制超媒编辑器完成课页/课件创建、编辑、优化和审查，结构化编辑富文本，搜索/克隆创建/跳转书本，利用模板与素材设计目录，搜索和诊断题目、管理目录题目或题目 AI 讲解，或为元素增删改查和复制数字模块时使用。负责连接与工作流编排，并按子任务加载书本、状态、素材、文本、题目、数字模块、区块、元素、画布和大纲子技能。
 ---
 # Super Editor Control（总控）
 
@@ -13,6 +13,9 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 | `super-editor-state` | 读取/理解现状：页面列表、区块树、元素树、元素类型、找重复、备份 | getState / getSlide / getBlock / listElements / getCanvasTree / searchElements / isDirty |
 | `super-editor-assets` | 获取用户信息；搜索、理解并应用本书样章/区块模板、组件库和图片素材；自主新增目录前的素材选型 | getUserInfo / searchTemplates / applyTemplate / searchComponents / applyComponent / searchImageLibrary / applyLibraryImage |
 | `super-editor-books` | 搜索和核对源书；继承源书属性与内容创建新书；覆盖名称、教辅类型和封面；生成或执行书本跳转 | searchBooks / getBookInfo / createBookFromSource / jumpToBook |
+| `super-editor-questions` | 浏览题目路径/筛选字典；搜索当前目录、当前书资源、学习路径或总题库；读取详情/题解并校验选题；管理目录题目和题目 AI 讲解 | listQuestionPaths / getQuestionSearchOptions / searchQuestions / getQuestions / validateQuestionSelection / getQuestionSolutions / 目录与讲解方法 |
+| `super-editor-digital-modules` | 查询、创建、修改、删除和复制元素绑定的数字模块；配置跳转、定位、计时、图文、音视频、课件、题目等点击交互 | listDigitalModuleTypes / getDigitalModule / listDigitalModules / createDigitalModule / updateDigitalModule / deleteDigitalModule / copyDigitalModule |
+| `super-editor-text` | 结构化读取和安全编辑普通文本、表格单元格、思维导图节点；局部替换、字符/段落/列表格式、独立文本框布局、字体、搜索、样式复制和适配检查 | getTextDocument / editText / formatText / setTextLayout / inspectTextLayout / fitTextToBox / searchTextElements |
 | `super-editor-blocks` | 区块增删改查、复制、移动、重命名、调尺寸、批量插入/替换/跨页复制 | addBlock / updateBlock / deleteBlock / moveBlock / cloneBlock / insertBlocks / replaceBlock / copyBlockToSlide |
 | `super-editor-elements` | 元素增删改查、属性与样式、批量、对齐/分布、选中、打组/解组、层级、**表格（读网格/改单元格/行列增删/合并拆分）**、选项卡 | addElement / updateElements / alignElements / setElementSpacing / setTextStyle / getTableGrid / setTableCellContent / mergeTableCells / groupElements 等 |
 | `super-editor-canvas` | 页面切换/增删/排序/重命名/复制、滚动定位/缩放、截图、**快照回滚（checkpoint/rollback，替代撤销重做）**、保存、整页备份导入 | scrollToBlock / setZoom / fitCanvas / renameSlide / duplicateSlide / exportSlide / screenshot / checkpoint / rollback / save |
@@ -22,7 +25,7 @@ description: 超媒内容编辑器（super-editor）总控技能。用户要求 
 
 ## 1. 架构
 
-- **桥接层**（super-editor 仓库内实现）：`src/modules/contentEditor/aiControl/`，页面挂载 `window.__superEditor`。覆盖状态、用户与素材库查询，书本搜索/克隆创建/跳转，页面/区块/元素/大纲编辑，表格、思维导图、文本自适应、图片上传、快照回滚、保存与截图；v1.1 增加书本管理。
+- **桥接层**（super-editor 仓库内实现）：`src/modules/contentEditor/aiControl/`，页面挂载 `window.__superEditor`。覆盖状态、用户和素材库，题目路径/筛选/检索/目录资源/AI 讲解，书本搜索/克隆创建/跳转，元素数字模块管理，页面/区块/元素/大纲编辑，表格、思维导图、文本自适应、通用文件上传、快照回滚、保存与截图。
 - **插件本地 RPC broker**（正式推荐）：插件 MCP 进程在 `127.0.0.1:8765` 提供浏览器 RPC。页面开启“AI 控制”后自动注册，无需 Electron 或正式站点后端 RPC。
 - **插件 stdio MCP**：`.mcp.json` 启动插件自带适配器；`editor_*` 工具首次调用时自动选择可用页面。多 Codex 任务通过页面租约隔离，owner 退出后 follower 自动接管。
 - **开发 RPC 兜底**：开发页面默认也使用插件本地 broker。只有显式设置 `window.__SUPER_EDITOR_RPC_URL = window.location.origin + '/ai-control'` 时，才使用 `vue.config.js` 的同源 dev RPC。
@@ -70,9 +73,9 @@ await b.batch({ steps: [
 ## 3. 标准工作流
 
 1. **连接确认**：桥接 DOM 标记 + `ping()`（经 RPC 通道）。
-2. **侦察**：书本搜索/创建/跳转先加载 `super-editor-books`；课件编辑用 `getState()` → `getSlide(currentSlideId)` → 全量 JSON 备份到磁盘（`super-editor-state`）。
-3. **规划**：列出改动清单（增/删/改/移）；新增目录或重做版式时先加载 `super-editor-assets`，盘点可复用模板、组件和图片，再确定从模板起步还是从空白页起步。
-4. **执行**：每步一类操作（`super-editor-blocks` / `super-editor-elements`），完成后用 `getBlock` / `listElements` 核对；渲染核对用 `scrollToBlock` / `scrollToElement` + 页面截图（`super-editor-canvas` 3.2）。
+2. **侦察**：书本搜索/创建/跳转先加载 `super-editor-books`；课件编辑用 `getState()` → `getSlide(currentSlideId)` → 全量 JSON 备份到磁盘（`super-editor-state`）；题目任务先确认 scope、路径和当前目录映射；涉及点击交互时读取目标元素当前数字模块。
+3. **规划**：列出改动清单（增/删/改/移）；新增目录或重做版式时先加载 `super-editor-assets`，盘点可复用模板、组件和图片；文本内容或样式修改加载 `super-editor-text`，先用统一 target 读取普通文本/表格单元格/思维导图节点的结构化文档，布局类操作仅用于独立文本元素；题目型交互先加载 `super-editor-questions` 读取详情、题解并校验，type 94 先准备讲解记录，再加载 `super-editor-digital-modules` 配置关联。
+4. **执行**：每步一类操作（`super-editor-blocks` / `super-editor-elements` / `super-editor-text` / `super-editor-questions` / `super-editor-digital-modules`），完成后用对应读取工具核对；渲染核对用 `scrollToBlock` / `scrollToElement` + 页面截图（`super-editor-canvas` 3.2）。数字模块、目录题目和讲解写操作即时持久化，不依赖画布 `save()`。
 5. **保存**：`save()` → 刷新页面（F5 / reload）→ `getSlide` 验证持久化（`super-editor-canvas` 4）。
 6. **收尾**：告知用户刷新浏览器页面查看；更新备份目录。
 
@@ -80,6 +83,7 @@ await b.batch({ steps: [
 
 - 编辑前备份原始 JSON；删除前比对内容（同名 ≠ 重复）。
 - `addSlide`/`deleteSlide`/`moveSlide` 立即写库；`save()` 写当前页；涉及真实课件的大改动先告知。
+- 目录题目移除/排序必须使用目录关系 `resourceMappingId`，不是题目 GUID；题目 AI 讲解启动后用状态工具查询，不在一次调用内长轮询。
 - 桥接只在用户开启顶部“AI 控制”按钮后挂载，关闭按钮或离开页面时卸载。
 - 写操作必须走桥接（Vuex action），不要直接改 store，否则破坏撤销/重做。
 - **自动保存已禁用**：AI 控制开启时编辑器自动保存（10s 定时）已禁用，AI 的改动只有显式调用 `save()` 才会写回后端；测试性改动结束后仍需删除/还原，`getState().dirty` 可判断是否有未保存改动。

@@ -4,7 +4,7 @@
 
 - stdio MCP 适配器：向 Codex 提供结构化 `editor_*` 工具。
 - 本机浏览器 RPC 中继：在 `127.0.0.1:8765` 维护页面实例、命令队列和结果回传。
-- 编辑工作流技能：覆盖书本、模板、素材、页面、区块、元素、大纲、保存和回滚。
+- 编辑工作流技能：覆盖书本、模板、素材、题目检索/诊断/目录管理/AI 讲解、数字模块、结构化富文本、页面、区块、元素、大纲、保存和回滚。
 
 整个正式链路不依赖 Electron、CDP、浏览器调试端口或正式环境后端 RPC 路由。
 
@@ -41,9 +41,80 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
 1. 安装或更新插件后新开一个 Codex 任务。
 2. 在普通浏览器中登录并打开目标课件。
 3. 点击顶部“AI 控制”；提示本地网络权限时允许。
-4. 直接让 Codex 制作或修改课件。页面按钮提示“AI 控制已连接”后即可执行。
+4. 直接让 Codex 制作或修改课件、搜索并管理题目资源、准备题目 AI 讲解，或为元素配置网页跳转、定位、计时、图文、音视频等数字模块。页面按钮提示“AI 控制已连接”后即可执行。
 
 `editor_status` 是只读检查，不会长期占用页面。`editor_connect` 仅用于主动重新选择页面。
+
+## 题目能力
+
+- 用 `editor_list_question_paths` 和 `editor_get_question_search_options` 获取真实路径与筛选字典。
+- `editor_search_questions` 支持当前目录、当前书资源、学习路径和总题库；`book` 是
+  `learningPath` 兼容别名，不提供无界 `all` 搜索。
+- 用 `editor_get_questions`、`editor_get_question_solutions` 和
+  `editor_validate_question_selection` 核对详情、缺失 GUID、父子题冲突及答题模块兼容性。
+- 用 `editor_add_questions_to_catalog`、`editor_remove_catalog_question`、
+  `editor_move_catalog_question` 管理目录题目。添加使用题目 GUID，移除/排序使用目录关系
+  `resourceMappingId`。
+- 用 `editor_get_question_explanations`、`editor_start_question_explanation_generation`、
+  `editor_get_question_explanation_status`、`editor_save_question_explanation` 和
+  `editor_delete_question_explanation` 准备 type 94 所需讲解记录 ID。生成是异步任务，start
+  会立即返回，不在一次 MCP 调用中长轮询。
+
+目录题目和讲解写操作立即持久化，不依赖 `editor_save`，也不能由画布快照回滚。当前版本不包含完整题目编辑、OCR/AI 录题或把题目排版插入画布区块。
+
+## 文本能力
+
+Bridge 1.6.0 起，结构化文本能力不只覆盖独立 `text` 元素，也覆盖表格单元格和思维导图节点。内容类工具
+统一接受以下目标之一，同时继续兼容原有 `elementId`：
+
+```json
+{ "target": { "kind": "element", "elementId": "text-1" } }
+{ "target": { "kind": "tableCell", "tableId": "table-1", "cellId": "cell-1" } }
+{ "target": { "kind": "tableCell", "tableId": "table-1", "row": 0, "col": 1 } }
+{ "target": { "kind": "mindNode", "mindId": "mind-1", "nodeId": "node-1" } }
+```
+
+`editor_text_info/document/set_content/set_style/edit/set_link/remove_link/edit_embed/format` 使用上述统一
+`target`；`editor_text_adaptive/fit/set_layout/inspect_layout/fit_to_box` 涉及独立文本框几何，只接受
+legacy `elementId`。
+
+文本能力不再局限于整段 HTML 替换：
+
+- `editor_text_document` 返回可见 `plainText/displayText`（拼音框展开为 word）、Quill `indexText`、
+  `displayIndexMap`、UTF-16 稳定索引、段落、格式 runs、内嵌对象、超链接、默认样式、布局和
+  `contentHash/htmlHash/hyperlinkMetadataHash`。`contentHash` 联合覆盖 canonical HTML 与稳定排序后的
+  超链接元数据，因此仅链接参数变化也会触发并发保护；另两个 hash 只用于分项诊断。可见文本位置不能
+  直接当写入 index，局部编辑前先读取结构范围。
+- `editor_text_edit` 用 UTF-16 索引插入、替换、删除，或用 `findReplace` 按文字匹配；省略
+  `findReplace` 的 `text/html` 即删除匹配，并保留未修改区域的富文本格式；
+  `expectedContentHash` 可阻止正文或链接元数据的并发覆盖，`dryRun` 可先预览命中范围。
+- `editor_text_set_content` 只用于明确的整段重写，也支持 `expectedContentHash + dryRun`，避免把并发修改
+  或不能安全往返的内嵌结构直接覆盖。
+- 正文读取与写入使用生产 Quill/`convertHTML` 做有界稳定化：最多 5 轮，直到相邻两轮 HTML 完全一致，
+  且每轮保留安全往返检查；超限会返回 `TEXT_CANONICALIZATION_UNSTABLE`，不会落库。
+- `editor_text_set_link` / `editor_text_remove_link` 原子维护文字范围和超链接元数据；
+  新链接的 `hyperlink_id` 可省略并由 Bridge 生成，后续以返回的 id 为准；`editor_text_edit_embed`
+  原子增删改公式、拼音和内嵌图片。自定义 blot 未注册时会拒绝写入。
+- `editor_text_format` 按默认样式、全文、范围、文字匹配或 0-based 段落下标应用字符/段落/列表格式，
+  支持 `expectedContentHash + dryRun`；`editor_text_set_layout` 类型安全地修改自适应、内边距、横竖排、
+  对齐、背景、描边和阴影，但不接受 hash 或 dry-run 参数。
+- `editor_text_set_style` 只接受默认字体、字号、颜色、粗斜体、行距和字距等字段；段落对齐、列表、
+  下划线或背景等可见格式使用
+  `editor_text_format` 的 `all/range/match/paragraph` scope。
+- `editor_text_inspect_layout` 诊断溢出、裁切、尺寸上限和字体；`editor_text_fit` 让文本框适应内容，
+  且不改内容、不接受 hash 或 dry-run；`editor_text_fit_to_box` 则保持文本框大小并缩小字号，接受
+  `expectedContentHash` 但不接受 `dryRun`。混合或不可解析字号默认零写入，只有用户明确同意后才传
+  `allowUniformizeMixedSizes=true` 统一字号。
+- `editor_text_search` 默认搜索 `element/tableCell/mindNode` 三类目标，可用 `targetKinds` 缩小范围，并返回区块、目标、片段、可写入的
+  `index/length` 及仅供展示的 `displayIndex/displayLength`；
+  `editor_text_copy_style` 支持 `sourceTarget/targetTargets`（也可与 legacy source/target 参数混用）复制默认、
+  字符或段落样式；`layout/all` 仅支持独立文本元素，嵌套目标会返回
+  `TEXT_LAYOUT_TARGET_UNSUPPORTED`。`editor_text_fonts` 列出可用字体。
+
+推荐工作流是 `editor_text_document` → `editor_checkpoint({ label? })` → 局部编辑/格式化 →
+`editor_text_inspect_layout` → 截图核对 → `editor_save`。文本写操作仍属于当前页本地状态，保存前可由
+`editor_rollback({ checkpointId })` 回滚。通用 `editor_update_element` 会拒绝文本 content、链接元数据和字数统计旁路更新；
+位置、尺寸和默认样式等通用字段不受影响。
 
 ## 安装
 
@@ -102,12 +173,14 @@ codex plugin add super-editor-control@super-editor-control
 
 ## 组成
 
-- `.mcp.json`：启动插件自带的 stdio MCP。
+- `.mcp.json`：启动插件自带的 stdio MCP。文件本身保持官方支持的直接 server map；
+  `.codex-plugin/plugin.json` 再通过 `mcpServers: "./.mcp.json"` 引用它，不要在文件内重复包
+  `mcpServers`。
 - `scripts/mcp-server/start.ps1`：Windows 自动定位 Codex 捆绑或系统 Node 运行时。
 - `scripts/setup-mcp.sh`：macOS/Linux 探测 Node 并生成本机 MCP 配置。
 - `scripts/mcp-server/index.js`：MCP 工具适配器。
 - `scripts/mcp-server/rpc-broker.js`：本机 RPC 中继、选主接管、页面租约和故障语义。
-- `skills/`：总控及书本、素材、状态、区块、元素、画布、大纲子技能。
+- `skills/`：总控及书本、素材、题目、数字模块、状态、区块、元素、画布、大纲子技能。
 - `assets/bridge-api-spec.md`：`window.__superEditor` 桥接契约。
 - `assets/production-integration-spec.md`：浏览器与插件本地 RPC 协议及部署要求。
 
@@ -118,9 +191,7 @@ cd scripts/mcp-server
 npm test
 ```
 
-测试覆盖 CORS/LNA 响应头、长轮询、结果幂等、页面租约、客户端中断与 MCP 取消、
-queued/in-flight 故障语义、串行工具、两个 MCP 进程选主、owner 强制退出后的接管、
-截断响应和有界关闭。
+测试覆盖插件 MCP 配置结构、题目/数字模块工具契约、CORS/LNA 响应头、长轮询、结果幂等、页面租约、客户端中断与 MCP 取消、queued/in-flight 故障语义、串行工具、两个 MCP 进程选主、owner 强制退出后的接管、截断响应和有界关闭。
 
 直接调试可运行 `node scripts/mcp-server/index.js`；需要 mock 时设置
 `SUPER_EDITOR_MOCK=1`。默认端口可用 `SUPER_EDITOR_RPC_PORT` 覆盖，但网页端必须通过

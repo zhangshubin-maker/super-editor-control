@@ -1,7 +1,7 @@
 // 驱动器：通过插件进程内置的 127.0.0.1 RPC 中继控制普通浏览器页面。
 // 设置环境变量 SUPER_EDITOR_MOCK=1 可进入 mock 模式（不连接编辑器，便于测试 MCP 服务本身）。
 
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
@@ -18,6 +18,7 @@ const DISCOVERY_RETRY_MS = 100
 const CONTROL_TIMEOUT_MS = 3000
 const CLIENT_ID = 'mcp-' + randomUUID()
 const LEASE_RENEW_INTERVAL_MS = 10000
+const MAX_INLINE_FILE_BYTES = 70 * 1024 * 1024
 
 let active = null // { mode: 'rpc'|'mock', origin, instanceId, page }
 let connectPromise = null
@@ -36,25 +37,56 @@ const MIME_BY_EXT = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
-  '.svg': 'image/svg+xml'
+  '.svg': 'image/svg+xml',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.pdf': 'application/pdf',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 }
 
-// 把本地图片路径读取为 dataURL；已有 data/base64 时原样透传
-async function resolveImageInput(args = {}) {
+// 浏览器不能直接读取 MCP 进程所在机器的路径，因此先把本地文件转成 dataURL。
+// broker 单请求上限为 100MB；base64 还会膨胀约 1/3，主动限制在 70MB 以内。
+async function resolveFileInput(
+  args = {},
+  { pathKey = 'filePath', defaultMime = 'application/octet-stream' } = {}
+) {
   const out = { ...args }
-  if (!out.imagePath) return out
+  const localPath = out[pathKey]
+  if (!localPath) return out
+  const resolvedPath = path.resolve(localPath)
+  const ext = path.extname(resolvedPath).toLowerCase()
+  const mime = out.mimeType || MIME_BY_EXT[ext] || defaultMime
+  out.mimeType = mime
+  out.fileName = out.fileName || path.basename(resolvedPath)
+  delete out.filePath
+  delete out.imagePath
   if (MOCK) {
-    out.data = 'data:image/png;base64,mock'
+    out.data = `data:${mime};base64,mock`
     return out
   }
-  const filePath = path.resolve(out.imagePath)
-  const buf = await readFile(filePath)
-  const ext = path.extname(filePath).toLowerCase()
-  const mime = MIME_BY_EXT[ext] || 'image/png'
+  const fileStat = await stat(resolvedPath)
+  if (!fileStat.isFile()) throw new Error('本地路径不是文件：' + resolvedPath)
+  if (fileStat.size > MAX_INLINE_FILE_BYTES) {
+    throw new Error(
+      `本地文件超过 ${Math.floor(MAX_INLINE_FILE_BYTES / 1024 / 1024)}MB，` +
+        '无法通过当前 base64 RPC 通道上传，请先压缩或使用远程素材 URL'
+    )
+  }
+  const buf = await readFile(resolvedPath)
   out.data = `data:${mime};base64,${buf.toString('base64')}`
-  out.mimeType = out.mimeType || mime
-  out.fileName = out.fileName || path.basename(filePath)
   return out
+}
+
+// 旧图片工具继续使用 imagePath，并保持未知扩展名默认 image/png 的行为。
+async function resolveImageInput(args = {}) {
+  return resolveFileInput(args, { pathKey: 'imagePath', defaultMime: 'image/png' })
 }
 
 export function isMock() {
@@ -399,6 +431,11 @@ export async function uploadImage(args = {}) {
   return bridgeCall('uploadImage', [a])
 }
 
+export async function uploadFile(args = {}) {
+  const a = await resolveFileInput(args)
+  return bridgeCall('uploadFile', [a])
+}
+
 export async function addImageElement(args = {}) {
   const a = await resolveImageInput(args)
   return bridgeCall('addImageElement', [a])
@@ -417,11 +454,103 @@ export async function shutdown() {
 const TINY_PNG_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
 
+function createMockQuestion(guid = 'mock-question-guid-1') {
+  return {
+    guid: String(guid),
+    parentGuid: null,
+    title: '示例题目 ' + guid,
+    stemHtml: '<p>示例题目 ' + guid + '</p>',
+    stemText: '示例题目 ' + guid,
+    modelId: 1,
+    modelName: '单选题',
+    subModelId: 1,
+    difficulty: 2,
+    options: [
+      { key: 'A', content: '选项 A' },
+      { key: 'B', content: '选项 B' }
+    ],
+    answers: ['A'],
+    solution: '<p>A</p>',
+    analysis: '<p>示例解析</p>',
+    review: '',
+    tags: [],
+    features: [],
+    hasChildren: false,
+    children: [],
+    hasAnswer: true,
+    hasSolution: true,
+    hasAnalysis: true,
+    explainIds: [901],
+    hasExplanation: true,
+    hasImages: false,
+    hasFormula: false
+  }
+}
+
+function normalizeMockQuestionGuids(guids) {
+  const requestedGuids = (Array.isArray(guids) ? guids : [])
+    .map((guid) => String(guid === undefined || guid === null ? '' : guid).trim())
+    .filter(Boolean)
+  const uniqueGuids = [...new Set(requestedGuids)]
+  return {
+    requestedGuids,
+    uniqueGuids,
+    duplicateGuids: [
+      ...new Set(
+        requestedGuids.filter(
+          (guid, index) => requestedGuids.indexOf(guid) !== index
+        )
+      )
+    ]
+  }
+}
+
+function getMockTextTarget(arg = {}) {
+  if (arg.target && typeof arg.target === 'object') return { ...arg.target }
+  return { kind: 'element', elementId: String(arg.elementId || '') }
+}
+
+function getMockTextIdentity(arg = {}) {
+  const target = getMockTextTarget(arg)
+  const ownerId =
+    target.kind === 'element'
+      ? target.elementId
+      : target.kind === 'tableCell'
+        ? target.tableId
+        : target.mindId
+  return {
+    elementId: ownerId === undefined || ownerId === null ? null : String(ownerId),
+    target,
+    targetKind: target.kind,
+    layoutOwner:
+      target.kind === 'element' ? 'text' : target.kind === 'tableCell' ? 'table' : 'mind',
+    standaloneLayoutSupported: target.kind === 'element'
+  }
+}
+
+function getMockNestedTextMutationLayout(arg = {}) {
+  if (getMockTextTarget(arg).kind === 'element') return {}
+  const reflowRequested = arg.fitSize !== false
+  return {
+    extendType: null,
+    width: null,
+    height: null,
+    dWidth: null,
+    dHeight: null,
+    autoResized: null,
+    rendered: true,
+    settled: !reflowRequested,
+    deferredLayout: reflowRequested,
+    reflowRequested,
+    moved: []
+  }
+}
+
 function mockResult(method, args = []) {
   const arg = (args && args[0]) || {}
   switch (method) {
     case 'ping':
-      return { version: '1.0.0-mock', editorType: 'content-editor', bookId: 'mock-book', mode: 'ai-control' }
+      return { version: '1.6.0', editorType: 'content-editor', bookId: 'mock-book', mode: 'ai-control' }
     case 'getUserInfo':
       return { uid: 'mock-user', name: '示例用户', nickname: '示例用户' }
     case 'searchBooks':
@@ -577,6 +706,24 @@ function mockResult(method, args = []) {
       return { blockId: 'mock-block-clone-' + Date.now() }
     case 'addElement':
       return { elementId: 'mock-el-' + Date.now() }
+    case 'updateElement': {
+      const protectedTextFields = new Set([
+        'content',
+        'hyperlinkParamList',
+        'wordCount',
+        'letterCount',
+        'spaceCount'
+      ])
+      const blocked =
+        String(arg.elementId || '').startsWith('text-') &&
+        Object.keys(arg.patch || {}).some((key) => protectedTextFields.has(key))
+      if (blocked) {
+        const error = new Error('文本内容和链接元数据必须使用 editor_text_* 专用工具')
+        error.code = 'TEXT_SPECIALIZED_UPDATE_REQUIRED'
+        throw error
+      }
+      return null
+    }
     case 'groupElements':
       return { groupId: 'mock-group-' + Date.now() }
     case 'selectSlide':
@@ -586,7 +733,6 @@ function mockResult(method, args = []) {
     case 'updateBlock':
     case 'deleteBlock':
     case 'moveBlock':
-    case 'updateElement':
     case 'deleteElement':
     case 'moveElement':
     case 'resizeElement':
@@ -645,7 +791,7 @@ function mockResult(method, args = []) {
       return { mindId: arg.mindId, theme: arg.theme }
     case 'getTextInfo':
       return {
-        elementId: arg.elementId,
+        ...getMockTextIdentity(arg),
         blockId: 'block-1',
         content: '<p>示例文本</p>',
         text: '示例文本',
@@ -655,16 +801,406 @@ function mockResult(method, args = []) {
         maxWidth: 700,
         maxHeight: null,
         background: { type: 'color', extendType: 'both' },
-        geometry: { left: 75, top: 20, width: 200, height: 50 },
+        geometry:
+          getMockTextTarget(arg).kind === 'element'
+            ? { left: 75, top: 20, width: 200, height: 50 }
+            : null,
         groupId: 0
       }
     case 'setTextContent':
-      return { elementId: arg.elementId, content: String(arg.content || ''), text: String(arg.content || ''), extendType: 'both', width: 260, height: 50, dWidth: 60, dHeight: 0, autoResized: true, moved: [] }
+      return {
+        ...getMockTextIdentity(arg),
+        content: String(arg.content || ''),
+        text: String(arg.content || ''),
+        plainText: String(arg.content || ''),
+        displayText: String(arg.content || ''),
+        indexText: String(arg.content || ''),
+        dryRun: arg.dryRun === true,
+        changed: true,
+        expectedContentHash: arg.expectedContentHash,
+        previousContentHash: 'mock-text-hash-1',
+        contentHash: 'mock-text-hash-2',
+        extendType: 'both',
+        width: arg.dryRun === true ? undefined : 260,
+        height: arg.dryRun === true ? undefined : 50,
+        dWidth: arg.dryRun === true ? undefined : 60,
+        dHeight: arg.dryRun === true ? undefined : 0,
+        autoResized: arg.dryRun === true ? undefined : true,
+        moved: arg.dryRun === true ? undefined : [],
+        ...getMockNestedTextMutationLayout(arg)
+      }
     case 'setTextAdaptive':
-      return { elementId: arg.elementId, extendType: arg.extendType, previous: 'both', width: 200, height: 50, dWidth: 0, dHeight: 0, autoResized: false, moved: [] }
+      return { elementId: arg.elementId, extendType: arg.extendType, previous: 'both', waitMs: arg.waitMs, width: 200, height: 50, dWidth: 0, dHeight: 0, autoResized: false, moved: [] }
     case 'fitTextSize':
       return { elementId: arg.elementId, width: 200, height: 50, dWidth: 0, dHeight: 0, autoResized: false, moved: [] }
-    case 'getOutline':
+    case 'getTextDocument':
+      return {
+        ...getMockTextIdentity(arg),
+        blockId: 'block-1',
+        contentHash: 'mock-text-hash-1',
+        content: '<p>示例文本</p>',
+        html: '<p>示例文本</p>',
+        canonicalHtml: '<p>示例文本</p>',
+        plainText: '示例文本',
+        displayText: '示例文本',
+        displayLength: 4,
+        indexText: '示例文本',
+        displayIndexMap: [
+          {
+            type: 'text',
+            indexStart: 0,
+            indexEnd: 4,
+            indexLength: 4,
+            displayStart: 0,
+            displayEnd: 4,
+            displayLength: 4,
+            displayText: '示例文本'
+          }
+        ],
+        length: 4,
+        indexUnit: 'utf16-code-unit',
+        indexModel: 'quill',
+        terminalNewline: true,
+        canonicalized: true,
+        roundTripSafe: true,
+        roundTripWarnings: [],
+        paragraphs: arg.includeParagraphs === false
+          ? undefined
+          : [{ index: 0, start: 0, length: 4, text: '示例文本', formats: { align: 'left' } }],
+        runs: arg.includeRuns === false
+          ? undefined
+          : [{ start: 0, length: 4, text: '示例文本', formats: { bold: true } }],
+        embeds: arg.includeEmbeds === false ? undefined : [],
+        hyperlinks: [],
+        orphanedHyperlinkMetadata: [],
+        defaultStyle: {
+          fontChinese: '思源黑体 CN',
+          fontEnglish: 'Arial',
+          fontNumber: 'Arial',
+          fontSize: 16,
+          color: '#333333'
+        },
+        layout: {
+          extendType: 'both',
+          textAlign: 'left',
+          verticalAlign: 'top',
+          width: 200,
+          height: 50
+        },
+        geometry:
+          getMockTextTarget(arg).kind === 'element'
+            ? { left: 75, top: 20, width: 200, height: 50 }
+            : null
+      }
+    case 'editText': {
+      const index = Number.isInteger(arg.index) ? arg.index : 0
+      const insertedText = arg.text !== undefined ? String(arg.text) : String(arg.html || '')
+      return {
+        ...getMockTextIdentity(arg),
+        action: arg.action,
+        dryRun: arg.dryRun === true,
+        changed: arg.dryRun !== true,
+        changes: [{ index, length: arg.length || 0, replacement: insertedText }],
+        beforeHash: 'mock-text-hash-1',
+        previousContentHash: 'mock-text-hash-1',
+        contentHash: arg.dryRun === true ? 'mock-text-hash-1' : 'mock-text-hash-2',
+        plainText: '示例文本',
+        content: '<p>示例文本</p>',
+        canonical: true,
+        indexUnit: 'utf16-code-unit',
+        indexModel: 'quill',
+        width: 200,
+        height: 50,
+        moved: [],
+        ...getMockNestedTextMutationLayout(arg)
+      }
+    }
+    case 'setTextLink': {
+      const hyperlinkId =
+        arg.hyperlinkId ||
+        (arg.hyperlink && (arg.hyperlink.hyperlink_id || arg.hyperlink.hyperlinkId)) ||
+        'mock-link-1'
+      return {
+        ...getMockTextIdentity(arg),
+        changed: arg.dryRun !== true,
+        dryRun: arg.dryRun === true,
+        range: { index: arg.index, length: arg.length },
+        hyperlinkId,
+        hyperlink: {
+          ...(arg.hyperlink || {}),
+          hyperlink_id: hyperlinkId
+        },
+        previousContentHash: 'mock-text-hash-1',
+        contentHash: arg.dryRun === true ? 'mock-text-hash-1' : 'mock-text-hash-2',
+        plainText: '示例文本',
+        content: '<p>示例文本</p>',
+        ...getMockNestedTextMutationLayout(arg)
+      }
+    }
+    case 'removeTextLink':
+      return {
+        ...getMockTextIdentity(arg),
+        changed: arg.dryRun !== true,
+        dryRun: arg.dryRun === true,
+        ranges: arg.hyperlinkId
+          ? [{ index: 0, length: 2 }]
+          : [{ index: arg.index, length: arg.length }],
+        hyperlinkId: arg.hyperlinkId || null,
+        previousContentHash: 'mock-text-hash-1',
+        contentHash: arg.dryRun === true ? 'mock-text-hash-1' : 'mock-text-hash-2',
+        plainText: '示例文本',
+        content: '<p>示例文本</p>',
+        ...getMockNestedTextMutationLayout(arg)
+      }
+    case 'editTextEmbed':
+      return {
+        ...getMockTextIdentity(arg),
+        action: arg.action,
+        changed: arg.dryRun !== true,
+        dryRun: arg.dryRun === true,
+        index: arg.index,
+        embedType: arg.embedType || 'image',
+        value: arg.action === 'delete' ? null : arg.value,
+        previousContentHash: 'mock-text-hash-1',
+        contentHash: arg.dryRun === true ? 'mock-text-hash-1' : 'mock-text-hash-2',
+        plainText: '示例文本',
+        content: '<p>示例文本</p>',
+        embeds:
+          arg.action === 'delete'
+            ? []
+            : [{ start: arg.index, length: 1, type: arg.embedType || 'image', value: arg.value }],
+        ...getMockNestedTextMutationLayout(arg)
+      }
+    case 'formatText':
+      return {
+        ...getMockTextIdentity(arg),
+        scope: arg.scope,
+        appliedFormats: arg.formats,
+        dryRun: arg.dryRun === true,
+        changed: arg.dryRun !== true,
+        expectedContentHash: arg.expectedContentHash,
+        ranges: [{ index: arg.index || 0, length: arg.length || 4 }],
+        beforeHash: 'mock-text-hash-1',
+        previousContentHash: 'mock-text-hash-1',
+        contentHash: arg.dryRun === true ? 'mock-text-hash-1' : 'mock-text-hash-2',
+        content: '<p>示例文本</p>',
+        canonical: true,
+        width: 200,
+        height: 50,
+        moved: [],
+        ...getMockNestedTextMutationLayout(arg)
+      }
+    case 'setTextLayout':
+      return {
+        elementId: arg.elementId,
+        before: { extendType: 'both', padding: { left: 0, right: 0, top: 0, bottom: 0 } },
+        layout: {
+          extendType: arg.layout.extendType || 'both',
+          overflowType:
+            arg.layout.overflowType === undefined
+              ? ['auto', 'overWithBreak']
+              : arg.layout.overflowType,
+          padding: {
+            left: arg.layout.paddingLeft || 0,
+            right: arg.layout.paddingRight || 0,
+            top: arg.layout.paddingTop || 0,
+            bottom: arg.layout.paddingBottom || 0
+          },
+          fill:
+            arg.layout.fill === undefined
+              ? { enabled: true, color: null }
+              : arg.layout.fill
+        },
+        geometry: { left: 75, top: 20, width: 200, height: 50 },
+        changedKeys: Object.keys(arg.layout || {}),
+        width: 200,
+        height: 50,
+        dWidth: 0,
+        dHeight: 0,
+        rendered: true,
+        settled: true,
+        deferredLayout: false,
+        moved: []
+      }
+    case 'inspectTextLayout':
+      return {
+        elementId: arg.elementId,
+        rendered: true,
+        measurement: {
+          clientWidth: 200,
+          clientHeight: 50,
+          contentWidth: 64,
+          contentHeight: 26,
+          overflowX: false,
+          overflowY: false,
+          overflow: false
+        },
+        geometry: { left: 75, top: 20, width: 200, height: 50 },
+        overflow: false,
+        clipped: false,
+        needResetSize: false,
+        fontNames: ['思源黑体 CN'],
+        extendType: 'both',
+        overflowType: null,
+        paragraphCount: 1,
+        runCount: 1,
+        embedCount: 0,
+        textLength: 4,
+        defaultStyle: { fontChinese: '思源黑体 CN', fontSize: 16 },
+        warnings: []
+      }
+    case 'fitTextToBox': {
+      if (
+        arg.expectedContentHash &&
+        arg.expectedContentHash !== 'mock-text-hash-1'
+      ) {
+        const error = new Error('文本内容已变化，请重新读取后再缩小字号')
+        error.code = 'TEXT_CONTENT_CONFLICT'
+        error.expectedContentHash = arg.expectedContentHash
+        error.actualContentHash = 'mock-text-hash-1'
+        throw error
+      }
+      const hasMixedSizes = arg.elementId === 'text-mixed-sizes'
+      if (hasMixedSizes && arg.allowUniformizeMixedSizes !== true) {
+        return {
+          elementId: arg.elementId,
+          applied: false,
+          fitted: false,
+          reason: 'mixed-font-sizes',
+          fontSizes: [14, 20],
+          invalidFontSizes: [],
+          requiresExplicitUniformization: true,
+          uniformizedMixedSizes: false,
+          contentHash: 'mock-text-hash-1'
+        }
+      }
+      return {
+        elementId: arg.elementId,
+        applied: true,
+        fitted: true,
+        overflow: false,
+        previousFontSize: 20,
+        fontSize: Math.min(Number(arg.maxFontSize) || 16, 16),
+        inspectionBefore: { measurement: { overflow: true } },
+        inspectionAfter: { measurement: { overflow: false } },
+        fits: true,
+        attempts: 3,
+        reachedMinimum: false,
+        conservativeSinglePass: true,
+        uniformizedMixedSizes: hasMixedSizes && arg.allowUniformizeMixedSizes === true,
+        contentHash: 'mock-text-hash-2'
+      }
+    }
+    case 'searchTextElements': {
+      const targetKinds = arg.targetKinds || ['element', 'tableCell', 'mindNode']
+      const examples = {
+        element: { kind: 'element', elementId: 'el-1' },
+        tableCell: { kind: 'tableCell', tableId: 'table-1', cellId: 'cell-1' },
+        mindNode: { kind: 'mindNode', mindId: 'mind-1', nodeId: 'node-1' }
+      }
+      const query = String(arg.query || '')
+      const matches = targetKinds.map((kind) => {
+        const identity = getMockTextIdentity({ target: examples[kind] })
+        return {
+          ...identity,
+          elementName: kind === 'element' ? '示例文本' : kind === 'tableCell' ? '示例表格' : '示例思维导图',
+          blockId: 'block-1',
+          text: '示例文本',
+          snippet: '示例文本',
+          snippetStart: 0,
+          index: 0,
+          length: query.length,
+          displayIndex: 0,
+          displayLength: query.length,
+          paragraphIndex: 0,
+          contentHash: 'mock-text-hash-1'
+        }
+      })
+      return {
+        query,
+        scope: arg.blockId ? 'block' : 'current-slide',
+        blockId: arg.blockId || null,
+        targetKinds,
+        searchedTargets: matches.length,
+        searchedElements: matches.length,
+        total: matches.length,
+        truncated: false,
+        warnings: [],
+        ranges: matches,
+        items: matches.map((match) => ({
+          elementId: match.elementId,
+          target: match.target,
+          targetKind: match.targetKind,
+          layoutOwner: match.layoutOwner,
+          standaloneLayoutSupported: match.standaloneLayoutSupported,
+          elementName: match.elementName,
+          blockId: match.blockId,
+          contentHash: match.contentHash,
+          ranges: [
+            {
+              index: match.index,
+              length: match.length,
+              displayIndex: match.displayIndex,
+              displayLength: match.displayLength,
+              text: match.text,
+              paragraphIndex: match.paragraphIndex,
+              snippet: match.snippet,
+              snippetStart: match.snippetStart
+            }
+          ]
+        })),
+        matches
+      }
+    }
+    case 'copyTextStyle': {
+      const sourceTarget = getMockTextTarget({
+        elementId: arg.sourceElementId,
+        target: arg.sourceTarget
+      })
+      const targetTargets = arg.targetTargets ||
+        (arg.targetElementIds || []).map((elementId) => ({ kind: 'element', elementId }))
+      return {
+        sourceElementId: getMockTextIdentity({ target: sourceTarget }).elementId,
+        sourceTarget,
+        targetElementIds: targetTargets
+          .filter((target) => target.kind === 'element')
+          .map((target) => target.elementId),
+        targetTargets,
+        scope: arg.scope || 'default',
+        copied: targetTargets,
+        results: targetTargets.map((target) => ({
+          ...getMockTextIdentity({ target }),
+          fitted: target.kind === 'element' ? { width: 200, height: 50, settled: true } : null
+        }))
+      }
+    }
+    case 'listTextFonts': {
+      const language = arg.language || 'all'
+      const fonts = [
+        {
+          label: '思源黑体 CN',
+          value: '思源黑体 CN',
+          languages: ['chinese'],
+          source: 'system',
+          available: true
+        },
+        {
+          label: 'Arial',
+          value: 'Arial',
+          languages: ['english', 'number'],
+          source: 'system',
+          available: true
+        }
+      ]
+      return {
+        language,
+        items:
+          language === 'all'
+            ? fonts
+            : fonts.filter((font) => font.languages.includes(language))
+      }
+    }
+   case 'getOutline':
     case 'refreshOutline':
       return {
         slideId: String(arg.slideId || 'slide-1'),
@@ -741,6 +1277,487 @@ function mockResult(method, args = []) {
       return { anchorId: String(arg.id), updated: true }
     case 'deleteOutlineAnchor':
       return { outlineId: String(arg.outlineId), anchorId: String(arg.anchorId), deleted: true }
+    case 'uploadFile': {
+      const fileName = String(arg.fileName || 'ai-file.bin')
+      return {
+        url: 'https://mock.example.com/upload/' + encodeURIComponent(fileName),
+        fileId: 'mock-file-' + Date.now(),
+        fileName,
+        mimeType: String(arg.mimeType || 'application/octet-stream')
+      }
+    }
+    case 'listDigitalModuleTypes':
+      return [
+        { type: 81, key: 'jump', name: '跳转', supported: true },
+        { type: 85, key: 'timer', name: '计时器', supported: true },
+        { type: 77, key: 'audio', name: '音频', supported: true },
+        { type: 78, key: 'video', name: '视频', supported: true }
+      ].filter((item) => arg.type === undefined || String(item.type) === String(arg.type))
+    case 'getDigitalModule':
+      return {
+        id: 'mock-relation-1',
+        relationId: 'mock-relation-1',
+        modelId: 'mock-model-1',
+        elementId: String(arg.elementId || 'el-1'),
+        type: 81,
+        typeName: '跳转',
+        name: '示例网页跳转',
+        config: { url: 'https://example.com' }
+      }
+    case 'listDigitalModules': {
+      const elementIds = Array.isArray(arg.elementIds) && arg.elementIds.length
+        ? arg.elementIds
+        : ['el-1']
+      return elementIds.map((elementId, index) => ({
+        id: 'mock-relation-' + (index + 1),
+        relationId: 'mock-relation-' + (index + 1),
+        modelId: 'mock-model-' + (index + 1),
+        elementId: String(elementId),
+        type: arg.type === undefined ? 81 : Number(arg.type),
+        typeName: arg.type === undefined || Number(arg.type) === 81 ? '跳转' : '数字模块',
+        name: '示例数字模块',
+        config: { url: 'https://example.com' }
+      }))
+    }
+    case 'createDigitalModule':
+      return {
+        created: !arg.validateOnly,
+        validated: true,
+        relationId: arg.validateOnly ? null : 'mock-relation-' + Date.now(),
+        modelId: arg.validateOnly ? null : 'mock-model-' + Date.now(),
+        elementId: String(arg.elementId || ''),
+        type: arg.type,
+        name: arg.name || '数字模块',
+        config: arg.config || {}
+      }
+    case 'updateDigitalModule':
+      return {
+        updated: !arg.validateOnly,
+        validated: true,
+        relationId: 'mock-relation-1',
+        modelId: 'mock-model-1',
+        elementId: String(arg.elementId || ''),
+        type: arg.type === undefined ? 81 : arg.type,
+        name: arg.name || '示例数字模块',
+        config: arg.config || {}
+      }
+    case 'deleteDigitalModule':
+      return {
+        deleted: true,
+        elementId: String(arg.elementId || ''),
+        relationId: 'mock-relation-1',
+        modelId: 'mock-model-1'
+      }
+    case 'copyDigitalModule':
+      return {
+        copied: true,
+        sharedModel: true,
+        sourceElementId: arg.sourceElementId || null,
+        targetElementId: String(arg.targetElementId || ''),
+        relationId: 'mock-relation-' + Date.now(),
+        modelId: arg.modelId || 'mock-model-1'
+      }
+    case 'listQuestionPaths': {
+      const child = {
+        id: 'mock-path-2',
+        name: '第一节 示例知识点',
+        parentId: 'mock-path-1',
+        depth: 1,
+        pathName: '第一章 示例章节 / 第一节 示例知识点',
+        bookId: arg.bookId || 'mock-book'
+      }
+      const root = {
+        id: 'mock-path-1',
+        name: '第一章 示例章节',
+        parentId: null,
+        depth: 0,
+        pathName: '第一章 示例章节',
+        bookId: arg.bookId || 'mock-book'
+      }
+      const tree = [
+        {
+          id: 'mock-path-1',
+          catalog_name: '第一章 示例章节',
+          parent_id: 0,
+          child_list: [
+            {
+              id: 'mock-path-2',
+              catalog_name: '第一节 示例知识点',
+              parent_id: 'mock-path-1',
+              child_list: []
+            }
+          ]
+        }
+      ]
+      return {
+        bookId: arg.bookId || 'mock-book',
+        flatten: arg.flatten !== false,
+        total: 2,
+        isPartial: false,
+        ...(arg.flatten === false ? { tree } : { items: [root, child] })
+      }
+    }
+    case 'getQuestionSearchOptions':
+      return {
+        bookId: arg.bookId || 'mock-book',
+        difficulties: [
+          { id: 1, name: '易' },
+          { id: 2, name: '较易' },
+          { id: 3, name: '中档' },
+          { id: 4, name: '较难' },
+          { id: 5, name: '难' }
+        ],
+        questionModels: [
+          { modelId: 5, name: '单选题' },
+          { modelId: 14, name: '普通复合题' }
+        ],
+        features: [{ id: 1, name: '常考题' }],
+        dictionaries: {
+          subjects: [{ id: 2, name: '数学' }],
+          grades: [{ id: 7, name: '七年级' }],
+          volumes: [{ id: 1, name: '上册' }],
+          byType: {
+            1: [{ id: 2, name: '数学' }],
+            3: [{ id: 7, name: '七年级' }],
+            5: [{ id: 1, name: '上册' }]
+          }
+        },
+        searchMap: [],
+        context: {
+          bookId: arg.bookId || 'mock-book',
+          subjectId: 2,
+          gradeId: 7,
+          volume: 1,
+          period: 2
+        }
+      }
+    case 'searchQuestions': {
+      const scope = arg.scope || 'currentCatalog'
+      const canonicalScope = scope === 'book' ? 'learningPath' : scope
+      const filterKeys = [
+        'period',
+        'subjectId',
+        'gradeId',
+        'volume',
+        'difficulty',
+        'features',
+        'guidList',
+        'haveResolution',
+        'haveReview',
+        'haveSolution',
+        'haveSolutionVideo',
+        'subModelIds',
+        'searchAreaTypes',
+        'sourceInfos',
+        'businessTypes',
+        'haveTag',
+        'tagNodeIds'
+      ]
+      const sourceFilters =
+        arg.filters && typeof arg.filters === 'object' && !Array.isArray(arg.filters)
+          ? arg.filters
+          : {}
+      const filters = {}
+      filterKeys.forEach((key) => {
+        if (sourceFilters[key] !== undefined) filters[key] = sourceFilters[key]
+        if (arg[key] !== undefined) filters[key] = arg[key]
+      })
+      const ignoredFilters = canonicalScope === 'global' ? [] : Object.keys(filters)
+      const item = {
+        ...createMockQuestion('mock-question-guid-1'),
+        resourceMappingId: ['currentCatalog', 'currentBookResources'].includes(canonicalScope)
+          ? 501
+          : null
+      }
+      const result = {
+        scope,
+        canonicalScope,
+        query: arg.query || '',
+        items: [item],
+        pageNo: Math.max(0, Number(arg.pageNo === undefined ? 0 : arg.pageNo) || 0),
+        pageSize: Math.min(
+          100,
+          Math.max(1, Number(arg.pageSize === undefined ? 20 : arg.pageSize) || 20)
+        ),
+        total: 1,
+        appliedFilters: canonicalScope === 'global' ? filters : {},
+        isPartial: false,
+        warnings: ignoredFilters.length
+          ? [`${canonicalScope} 范围不支持高级筛选，已忽略：${ignoredFilters.join(', ')}`]
+          : []
+      }
+      if (canonicalScope === 'global') {
+        return { ...result, paginator: { total_count: 1 } }
+      }
+      if (['currentCatalog', 'currentBookResources'].includes(canonicalScope)) {
+        return {
+          ...result,
+          bookId: arg.bookId || 'mock-book',
+          catalogId:
+            canonicalScope === 'currentCatalog' ? arg.catalogId || 'mock-catalog' : null,
+          sourceTotal: 1,
+          scannedCount: 1,
+          paginator: { total_count: 1 },
+          filteredLocally: !!arg.query,
+          ignoredFilters
+        }
+      }
+      return {
+        ...result,
+        bookId: arg.bookId || 'mock-book',
+        pathsTotal: 1,
+        pathsQueried: [arg.pathId || 'mock-path-1'],
+        ignoredFilters,
+        truncatedPaths: false
+      }
+    }
+    case 'getQuestions': {
+      const guidInfo = normalizeMockQuestionGuids(arg.guids)
+      const missingGuids = guidInfo.uniqueGuids.filter((guid) => guid.startsWith('missing-'))
+      const items = guidInfo.uniqueGuids
+        .filter((guid) => !missingGuids.includes(guid))
+        .map((guid) => createMockQuestion(guid))
+      if (arg.includeDiagnostics || arg.returnEnvelope) {
+        return {
+          items,
+          requestedGuids: guidInfo.requestedGuids,
+          uniqueGuids: guidInfo.uniqueGuids,
+          foundGuids: items.map((item) => item.guid),
+          missingGuids,
+          duplicateGuids: guidInfo.duplicateGuids
+        }
+      }
+      return items
+    }
+    case 'validateQuestionSelection': {
+      const guidInfo = normalizeMockQuestionGuids(arg.guids)
+      const requestedGuids = guidInfo.requestedGuids
+      const selectedGuids = guidInfo.uniqueGuids
+      const duplicateGuids = guidInfo.duplicateGuids
+      const missingGuids = selectedGuids.filter((guid) => guid.startsWith('missing-'))
+      const foundGuids = selectedGuids.filter((guid) => !missingGuids.includes(guid))
+      const parentChildConflicts =
+        foundGuids.includes('mock-parent-guid') && foundGuids.includes('mock-child-guid')
+          ? [{ parentGuid: 'mock-parent-guid', childGuid: 'mock-child-guid' }]
+          : []
+      const reasons = []
+      if (missingGuids.length) {
+        reasons.push({
+          code: 'MISSING_QUESTIONS',
+          message: '部分题目不存在或详情未返回',
+          guids: missingGuids
+        })
+      }
+      if (duplicateGuids.length) {
+        reasons.push({
+          code: 'DUPLICATE_GUIDS',
+          message: '题目 GUID 存在重复',
+          guids: duplicateGuids
+        })
+      }
+      if (parentChildConflicts.length) {
+        reasons.push({
+          code: 'PARENT_CHILD_CONFLICT',
+          message: '不能同时选择复合题父题及其子题',
+          conflicts: parentChildConflicts
+        })
+      }
+      if (Number(arg.targetModuleType) === 93 && foundGuids.length !== 1) {
+        reasons.push({
+          code: 'SINGLE_TARGET_REQUIRED',
+          message: '题目详情模块必须且只能关联一道题目',
+          expected: 1,
+          actual: foundGuids.length
+        })
+      }
+      const config = arg.config && typeof arg.config === 'object' ? arg.config : {}
+      const timeMode =
+        config.timeMode === undefined || config.timeMode === null ? 0 : Number(config.timeMode)
+      if (
+        Number(arg.targetModuleType) === 82 &&
+        Number(config.questionMode) === 2 &&
+        timeMode === 0
+      ) {
+        reasons.push({
+          code: 'INVALID_TIME_MODE',
+          message: '考核模式不支持不限时，请设置 timeMode=1 和 timeLimit'
+        })
+      }
+      if (
+        Number(arg.targetModuleType) === 82 &&
+        timeMode === 1 &&
+        (config.timeLimit === undefined || config.timeLimit === null || config.timeLimit === '')
+      ) {
+        reasons.push({
+          code: 'TIME_LIMIT_REQUIRED',
+          message: '倒计时模式需要设置 timeLimit'
+        })
+      }
+      return {
+        compatible: reasons.length === 0,
+        targetModuleType: Number(arg.targetModuleType),
+        requestedGuids,
+        selectedGuids,
+        foundGuids,
+        missingGuids,
+        duplicateGuids,
+        parentChildConflicts,
+        items: selectedGuids.map((guid) => ({
+          guid,
+          found: !missingGuids.includes(guid),
+          compatible: !missingGuids.includes(guid),
+          hasAnswer: !missingGuids.includes(guid),
+          hasSolution: !missingGuids.includes(guid),
+          hasAnalysis: !missingGuids.includes(guid),
+          hasExplanation: !missingGuids.includes(guid),
+          explainIds: missingGuids.includes(guid) ? [] : [901],
+          reasons: missingGuids.includes(guid)
+            ? [{ code: 'QUESTION_NOT_FOUND', message: `未找到题目 ${guid}`, guid }]
+            : []
+        })),
+        reasons
+      }
+    }
+    case 'getQuestionSolutions': {
+      const guidInfo = normalizeMockQuestionGuids(arg.guids)
+      return {
+        items: guidInfo.uniqueGuids.map((guid) => ({
+          guid,
+          solutions: [
+            {
+              answer: ['A'],
+              solution: '<p>示例解析</p>'
+            }
+          ],
+          hasSolution: true
+        })),
+        requestedGuids: guidInfo.uniqueGuids,
+        missingGuids: []
+      }
+    }
+    case 'addQuestionsToCatalog': {
+      const allRequestedGuids = (Array.isArray(arg.guids) ? arg.guids : []).map(String)
+      const requestedGuids = [...new Set(allRequestedGuids)]
+      const duplicateGuids = [
+        ...new Set(
+          allRequestedGuids.filter(
+            (guid, index) => allRequestedGuids.indexOf(guid) !== index
+          )
+        )
+      ]
+      const missingGuids = requestedGuids.filter((guid) => guid.startsWith('missing-'))
+      const existingGuids = requestedGuids.filter((guid) => guid.startsWith('existing-'))
+      const addableGuids = requestedGuids.filter(
+        (guid) => !missingGuids.includes(guid) && !existingGuids.includes(guid)
+      )
+      const canAdd = !arg.validateOnly && missingGuids.length === 0 && addableGuids.length > 0
+      return {
+        bookId: arg.bookId || 'mock-book',
+        catalogId: arg.catalogId || 'mock-catalog',
+        requestedGuids,
+        duplicateGuids,
+        existingGuids,
+        missingGuids,
+        addableGuids,
+        addedGuids: canAdd ? addableGuids : [],
+        added: canAdd,
+        validated: missingGuids.length === 0,
+        validateOnly: !!arg.validateOnly,
+        persistedImmediately: canAdd
+      }
+    }
+    case 'removeCatalogQuestion':
+      return {
+        removed: true,
+        deleted: true,
+        resourceMappingId: Number(arg.resourceMappingId),
+        persistedImmediately: true
+      }
+    case 'moveCatalogQuestion':
+      return {
+        moved: true,
+        resourceMappingId: Number(arg.resourceMappingId),
+        toIndex: Number(arg.toIndex),
+        persistedImmediately: true
+    }
+    case 'getQuestionExplanations': {
+      const guidInfo = normalizeMockQuestionGuids(arg.guids)
+      return {
+        items: guidInfo.uniqueGuids.map((guid, index) => {
+          const id = 901 + index
+          return {
+            guid,
+            explanations: [
+              {
+                id,
+                questionGuid: guid,
+                content: '<p>示例 AI 讲解</p>',
+                sort: 1,
+                isSelected: true,
+                available: true
+              }
+            ],
+            explainIds: [id]
+          }
+        }),
+        requestedGuids: guidInfo.uniqueGuids,
+        missingGuids: []
+      }
+    }
+    case 'startQuestionExplanationGeneration': {
+      const guids = normalizeMockQuestionGuids(arg.guids).uniqueGuids
+      return {
+        started: true,
+        batch: guids.length > 1,
+        bookId: arg.bookId || 'mock-book',
+        guids,
+        taskId: 801
+      }
+    }
+    case 'getQuestionExplanationStatus': {
+      const guids = normalizeMockQuestionGuids(arg.guids).uniqueGuids
+      return {
+        bookId: arg.bookId || 'mock-book',
+        items: guids.map((guid, index) => {
+          const id = 901 + index
+          return {
+            guid,
+            taskId: 801 + index,
+            taskStatus: 2,
+            status: 'succeeded',
+            done: true,
+            ...(arg.includeResults
+              ? {
+                  explanations: [
+                    {
+                      id,
+                      questionGuid: guid,
+                      content: '<p>示例 AI 讲解</p>',
+                      sort: 1,
+                      isSelected: true,
+                      available: true
+                    }
+                  ],
+                  explainIds: [id]
+                }
+              : {})
+          }
+        })
+      }
+    }
+    case 'saveQuestionExplanation':
+      return {
+        saved: true,
+        id: arg.id || 901,
+        questionGuid: String(arg.questionGuid),
+        persistedImmediately: true
+      }
+    case 'deleteQuestionExplanation':
+      return {
+        deleted: true,
+        explanationId: Number(arg.explanationId),
+        persistedImmediately: true
+      }
     case 'uploadImage':
       return {
         url: 'https://mock.example.com/upload/ai-image-' + Date.now() + '.png',

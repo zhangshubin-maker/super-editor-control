@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v1.2）
+# window.__superEditor 桥接 API 契约（v1.6）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -26,7 +26,9 @@
 
 // block 关键字段
 {
-  uuid, name,
+  id,   // 后端内容 id；数字模块的 hypermedia_content_id 必须使用它
+  uuid, // 画布区块 id；元素 templateId、布局和区块操作使用它
+  name,
   template_data_content: {
     size: { width, height },
     paddingTop, paddingBottom,
@@ -49,9 +51,13 @@
 // getSlide(slideId) 返回
 {
   slide: { id, name, size: { width, height }, background },
-  blocks: [ { uuid, name, size: { width, height }, elements: [ element ] } ]
+  blocks: [ { id, uuid, name, size: { width, height }, elements: [ element ] } ]
 }
 ```
+
+> `id` 与 `uuid` 不可互换。数字模块桥接只接收 `elementId`，由桥接在当前页元素树中找到
+> 所属模板并读取模板后端 `id`；不得让调用方填写 `hypermedia_content_id`，更不得把 `uuid`
+> 转成数字后提交。
 
 ## 4. 方法清单
 
@@ -73,6 +79,17 @@
 | `getTemplateDetail(payload)` | `{ templateId, parseContent? }` | `{ id, name, type, content, childList, lines }` |
 | `searchComponents(payload)` | `{ query?, scope?: all/system/mine, classifyType?, classifyId?, limit?, includeContent? }` | 可用组件元数据；默认不返回大体积 content |
 | `searchImageLibrary(payload)` | `{ query?, scope?: book/global/all, groupId?, bookId?, limit? }` | 图片素材 `[{ id, name, url, format, width, height, groupId, groupName, scope }]` |
+| `listDigitalModuleTypes(payload?)` | `{ type? }` | 数字模块类型、支持状态、默认值、配置字段和资源依赖 |
+| `getDigitalModule(payload)` | `{ elementId, includeRaw? }` | 元素当前关联模块；没有时返回 `null` |
+| `listDigitalModules(payload?)` | `{ elementIds?, type?, includeEmpty? }` | 批量读取当前页元素的数字模块关系 |
+| `listQuestionPaths(payload?)` | `{ bookId?, flatten?=true }` | `{ bookId, flatten, items 或 tree, total, isPartial }`；扁平节点含 `id/name/parentId/depth/pathName` |
+| `getQuestionSearchOptions(payload?)` | `{ bookId?, refresh? }` | 学段、学科、年级、册次、难度、题型及高级筛选字典 |
+| `searchQuestions(payload?)` | `{ scope?: currentCatalog/currentBookResources/learningPath/book/global, query?, bookId?, catalogId?, pathId?, quesScope?, pageNo?, pageSize?, ...筛选, includeRaw? }` | `{ items, scope, pageNo, pageSize, total, isPartial, ... }`；`book` 是 `learningPath` 兼容别名 |
+| `getQuestions(payload)` | `{ guids, includeRaw?, includeDiagnostics?/returnEnvelope? }` | 默认返回详情数组；诊断模式返回 `{ items, requestedGuids, uniqueGuids, foundGuids, missingGuids, duplicateGuids }`，不返回 `warnings` |
+| `validateQuestionSelection(payload)` | `{ guids, targetModuleType, config? }` | 题数、缺失、重复、父子冲突、答案/题解与模块配置兼容性诊断 |
+| `getQuestionSolutions(payload)` | `{ guids, includeRaw? }` | `{ items, requestedGuids, missingGuids }` |
+| `getQuestionExplanations(payload)` | `{ guids, includeRaw? }` | 按 GUID 分组的已保存题目 AI 讲解记录 |
+| `getQuestionExplanationStatus(payload)` | `{ guids, bookId?, includeResults? }` | 单次查询每题异步生成状态；可附已完成结果 |
 | `getSlide(slideId)` | string | 见上 |
 | `getBlock(blockId)` | string | `{ blockId, name, size, elements }`（单区块含元素树） |
 | `getElement(elementId)` | string | 元素完整数据（含 `blockId`） |
@@ -243,20 +260,95 @@
 - 大纲关联的 `blockIds` 是本页区块模板的 `uuid`（用 `listBlocks` / `getCanvasTree` 获取）。
 - 锚点编辑与编辑器 UI 一致：`updateOutlineAnchor` 走 `saveanchor` 接口；位置锚点（type=1）由 UI 按关联区块自动维护，AI 通常只增删改检索锚点（type=2）。
 
-### 图片上传与使用（v0.9：生图 → 上传 → 放入课件）
+### 题目资源（v1.4）
 
-图片上传复用项目标准 `upLoadFile`（uploadfile）通道，在编辑器页面内携带登录态完成；调用方只需传 base64 / dataURL 图片数据或直接传 url。
+题目桥接提供路径/字典、四类资源范围搜索、详情诊断、选题校验、题解、当前目录资源管理和题目 AI
+讲解。对应 MCP 工具统一使用 `editor_` 前缀。
+
+#### 搜索与诊断
+
+| Bridge 方法 / MCP 工具 | 参数 | 返回与约束 |
+|---|---|---|
+| `listQuestionPaths` / `editor_list_question_paths` | `{ bookId?, flatten? }` | 递归学习路径或扁平节点；`pathId` 必须来自此结果 |
+| `getQuestionSearchOptions` / `editor_get_question_search_options` | `{ bookId?, refresh? }` | `difficulties/questionModels/features/dictionaries/searchMap/context` 等实时字典 |
+| `searchQuestions` / `editor_search_questions` | 见 §4 查询表 | `currentCatalog`、`currentBookResources`、`learningPath`、`global`；`book` 仅为 `learningPath` 兼容别名，不支持 `all` |
+| `getQuestions` / `editor_get_questions` | `{ guids, includeRaw?, includeDiagnostics?/returnEnvelope? }` | 详情含父子题与内容诊断；诊断信封为 `{ items, requestedGuids, uniqueGuids, foundGuids, missingGuids, duplicateGuids }`，不返回 `warnings` |
+| `validateQuestionSelection` / `editor_validate_question_selection` | `{ guids, targetModuleType, config? }` | `{ compatible, reasons, requestedGuids, selectedGuids, foundGuids, missingGuids, duplicateGuids, parentChildConflicts, items, targetModuleType }` |
+| `getQuestionSolutions` / `editor_get_question_solutions` | `{ guids, includeRaw? }` | 独立答案/解答/解析及缺失诊断 |
+
+`editor_search_questions` 的显式筛选包括 `period/subjectId/gradeId/volume/difficulty/features/guidList`、
+答案/解析状态、`subModelIds/searchAreaTypes/sourceInfos/businessTypes/haveTag/tagNodeIds`。兼容
+`filters` 仅接受同一白名单，且不能覆盖关键词和分页。
+
+#### 当前目录题目管理
+
+| Bridge 方法 / MCP 工具 | 参数 | 语义 |
+|---|---|---|
+| `addQuestionsToCatalog` / `editor_add_questions_to_catalog` | `{ guids, bookId?, catalogId?, validateOnly? }` | 按 GUID 添加目录关系；`validateOnly` 不写库 |
+| `removeCatalogQuestion` / `editor_remove_catalog_question` | `{ resourceMappingId }` | 删除一道目录题目关系 |
+| `moveCatalogQuestion` / `editor_move_catalog_question` | `{ resourceMappingId, toIndex }` | 用 0 基下标调整目录题目顺序 |
+
+添加使用题目 GUID；删除和排序必须使用 `currentCatalog/currentBookResources` 结果中的数值
+`resourceMappingId`，不能传 GUID。三种写操作均立即持久化，不属于画布 `save/checkpoint/rollback`；
+写前读取当前映射，写后重新搜索核对。加入目录只建立资源关系，不会把题目排版插入画布区块。
+
+#### 题目 AI 讲解
+
+| Bridge 方法 / MCP 工具 | 参数 | 语义 |
+|---|---|---|
+| `getQuestionExplanations` / `editor_get_question_explanations` | `{ guids, includeRaw? }` | 读取已保存讲解；返回记录 `id` 可用于 type 94 |
+| `startQuestionExplanationGeneration` / `editor_start_question_explanation_generation` | `{ guids, bookId? }` | 启动后立即返回 `{ started, batch, guids, ... }`，不在内部长轮询 |
+| `getQuestionExplanationStatus` / `editor_get_question_explanation_status` | `{ guids, bookId?, includeResults? }` | 单次查询每题状态，必要时附完成结果 |
+| `saveQuestionExplanation` / `editor_save_question_explanation` | `{ questionGuid, content: string, id? }` | 新增或按讲解记录 `id` 更新并立即写库；content 是 HTML/Markdown/富文本字符串，不接收对象 |
+| `deleteQuestionExplanation` / `editor_delete_question_explanation` | `{ explanationId }` | 按讲解记录 ID 删除并立即写库 |
+
+type 94 必须区分父题 GUID、子题 GUID、讲解记录 `id` 与后端 `explain_ids`：模块项
+`questions[{ guid, explainIds }]` 中的 `guid` 是实际讲解对象，`explainIds` 是该对象已保存讲解记录 ID
+列表。先生成/查询讲解，再配置模块；任务 ID、题目 GUID 和展示序号都不能作为讲解记录 ID。
+
+type 82 中 `timeMode=0` 是正计时、`timeMode=1` 是倒计时；倒计时必须提供 `timeLimit`。
+测评/竞速模式 `questionMode=2` 不允许正计时 `timeMode=0`，创建前必须经
+`validateQuestionSelection` 校验。
+
+当前版本不涵盖完整题目创建/编辑、OCR 或 AI 录题，也不把题目内容自动排版插入画布区块。
+
+### 数字模块（v1.4：元素点击交互）
+
+数字模块关系由后端即时持久化，一个元素最多关联一个模块。所有方法只接收元素 `elementId`，
+桥接内部解析所属模板的后端 `id` 作为 `hypermedia_content_id`，并在修改时保留关系
+`id`、共享 `model_id`、内容行 `id/model_id` 以及嵌套实体 `id`。
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
+| `createDigitalModule(payload)` | `{ elementId, type, name?, config?, replaceExisting?=false, validateOnly?=false }` | 新关系；默认遇到已有模块时报错，`validateOnly` 只返回后端请求预览 |
+| `updateDigitalModule(payload)` | `{ elementId, type?, name?, config?, replaceType?=false, validateOnly?=false }` | 更新后的关系；切换类型必须显式 `replaceType` |
+| `deleteDigitalModule(payload)` | `{ elementId }` | `{ deleted, elementId, relationId, modelId }` |
+| `copyDigitalModule(payload)` | `{ sourceElementId? or modelId?, targetElementId, replaceExisting?=false }` | 目标关系；当前复制为 `relation` 模式，复用同一个 `model_id` |
+
+- 类型 `61/76/77/78/79/80/81/82/83/85/86/87/93/94/96/98/99` 提供语义化配置适配；其中 `94` 需要已生成的讲解 ID，`98` 只关联已完成生成的播客资源。类型清单会明确其余类型的支持程度和资源要求。
+- 模块名优先使用调用方名称，其次根据 URL、媒体名、目标或题目生成；仍无法生成时使用模块类型中文名。
+- `77` 音频和 `78` 视频可使用素材库 URL、AI 生成资源 URL，或先调用 `uploadFile` 上传本地文件，再把上传结果交给配置适配器。
+- `82/83/93/94` 等题目型模块使用题目/子题 GUID，不使用题目数字 `id`、目录 `id` 或展示序号；type 82/94 还须遵守上一节的组合校验和讲解记录 ID 规则。
+- `copyDigitalModule` 对齐现有 `addcontrolmodelrelation`：源与目标共享 `model_id`，修改共享模型可能影响所有关系；当前版本不声明独立深复制。
+- `create/update/delete/copy` 成功后发送 `ELEMENT_DIGITAL_MODULE` 广播刷新编辑器侧面板。
+- 这些写操作不进入画布快照，`checkpoint`、`rollback` 和 `save` 都不能撤销；调用前必须先查询确认目标。
+
+### 文件上传与媒体使用（v1.3）
+
+文件上传复用项目标准 `upLoadFile`（uploadfile）通道，在编辑器页面内携带登录态完成；调用方传 base64 / dataURL 数据，MCP 侧可把本地图片、音频、视频或文档路径转换为 dataURL。
+
+| 方法 | 参数 | 返回 |
+|------|------|------|
+| `uploadFile(payload)` | `{ data, fileName?, mimeType?="application/octet-stream" }`（data 支持纯 base64 或 dataURL） | `{ url, fileId, fileName, mimeType }` |
 | `uploadImage(payload)` | `{ data, fileName?="ai-image.png", mimeType?="image/png" }`（data 支持纯 base64 或 dataURL） | `{ url, fileId, fileName }` |
 | `addImageElement(payload)` | `{ blockId, url?, data?, left?, top?, width?, height?, name?, fixedRatio?=true }`（传 data 时自动先上传） | `{ url, elementId }` |
 | `setImageElementSrc(payload)` | `{ elementId, url?, data? }`（image/video 元素；传 data 时自动先上传） | `{ url, elementId }` |
 
 - 只传 `url` 时不触发上传，适合直接使用外链或媒体库已有地址。
+- `uploadImage` 是兼容接口，内部复用 `uploadFile`；通用上传结果可直接用于音频/视频数字模块。
 - 上传返回的 `url` 可直接作为图片元素 `src`、文本背景图 `background.image`（经 `updateElement` patch）或思维导图节点 `image`。
 - 推荐工作流（模型具备生图能力后）：生成本地 PNG → MCP `editor_upload_image`（传 `imagePath`）或桥接 `uploadImage` → `editor_add_element(type=image, payload={src})` 或 `addImageElement` → `moveElement/resizeElement` 排版。
-- 上传接口失败会抛错并返回服务端信息；图片过大（>10MB）或敏感内容被服务端拦截时请重试/调整提示词。
+- 插件当前通过 base64 RPC 传本地文件，主动限制原文件不超过 70MB；大视频应优先使用素材库或已有远程 URL。上传接口失败会抛错并返回服务端信息。
 
 ### 表格 / 选项卡 / 思维导图 / 文本
 
@@ -287,11 +379,56 @@
 | `updateMindNode(payload)` | `{ mindId, nodeId, patch }`（color/fontsize/bold/italic/fontFamily/background/note/image/hyperlink/priority/progress/expandState 等，null 删除） | `{ mindId, nodeId, updated }` |
 | `setMindTemplate(payload)` | `{ mindId, template }`（default/right/left/right_angle/default_angle/left_angle/orthogonal） | `{ mindId, template }` |
 | `setMindTheme(payload)` | `{ mindId, theme }`（mind-default/retro/youth/minimalist/black） | `{ mindId, theme }` |
-| 文本（v0.6，自适应：`background.extendType` = both/horizontal/vertical/none，`maxWidth/maxHeight` 上限，背景图尺寸为下限，组内元素自动联动位移） | | |
-| `getTextInfo(payload)` | `{ elementId }` | `{ elementId, blockId, content(HTML), text(纯文本), wordCount, font, lineHeight, wordSpace, verticalAlign, textAlign, adaptive, overflowType, maxWidth, maxHeight, padding, background{type,extendType,color,image,width,height}, geometry, groupId, isLock, isHidden }` |
-| `setTextContent(payload)` | `{ elementId, content, fitSize?, waitMs? }`（纯文本自动包 `<p>`，`\n` 自动拆成多段；fitSize 默认 true 触发自适应） | `{ elementId, content, text, extendType, width, height, dWidth, dHeight, autoResized, moved[] }` |
-| `setTextAdaptive(payload)` | `{ elementId, extendType, fitSize? }`（both/horizontal/vertical/none） | `{ elementId, extendType, previous, width, height, dWidth, dHeight, autoResized, moved[] }` |
+Bridge 1.6.0 的结构化富文本内容级方法统一接受且只接受一种目标选择器：
+
+- legacy 普通文本：`{ elementId }`；统一写法：`{ target: { kind: 'element', elementId } }`；
+- 表格单元格：`{ target: { kind: 'tableCell', tableId, cellId } }`，或用 0-based `row + col`
+  代替 `cellId`；若同时给出两种定位，它们必须指向同一单元格；被合并覆盖的格不可写；
+- 思维导图节点：`{ target: { kind: 'mindNode', mindId, nodeId } }`；节点 id 重复时拒绝操作。
+
+下表中的 `selector` 指 `{ elementId } | { target }`。返回统一带
+`elementId`（所属外层元素 id）、规范化 `target`、`targetKind`、`layoutOwner` 和
+`standaloneLayoutSupported`。内容级方法包括
+`getTextInfo/getTextDocument/setTextContent/editText/setTextLink/removeTextLink/editTextEmbed/formatText`；
+文本框布局与几何方法 `setTextAdaptive/fitTextSize/setTextLayout/inspectTextLayout/fitTextToBox` 仍只接受
+独立文本元素 `elementId`。
+
+| 文本方法 | 参数 | 返回 |
+|------|------|------|
+| `getTextInfo(payload)` | `{ ...selector }` | 统一目标身份 + `{ blockId, content(HTML), text(纯文本), wordCount, font, lineHeight, wordSpace, verticalAlign, textAlign, adaptive, overflowType, maxWidth, maxHeight, padding, background, geometry, groupId, isLock, isHidden }`；嵌套目标 `geometry=null` |
+| `setTextContent(payload)` | `{ ...selector, content, expectedContentHash?, dryRun?, fitSize?, waitMs? }`（纯文本自动包 `<p>`，换行自动拆段；实际写入时 fitSize 默认 true） | 统一目标身份 + `{ dryRun, changed, previousContentHash, contentHash, content, plainText, displayText, indexText }`；独立文本写入另返回 width/height/dWidth/dHeight/autoResized/moved[] |
+| `setTextAdaptive(payload)` | `{ elementId, extendType, fitSize?, waitMs? }`（both/horizontal/vertical/none） | `{ elementId, extendType, previous, width, height, dWidth, dHeight, autoResized, moved[] }` |
 | `fitTextSize(payload)` | `{ elementId, waitMs? }`（强制重测） | `{ elementId, width, height, dWidth, dHeight, autoResized, moved[] }` |
+| `getTextDocument(payload)` | `{ ...selector, includeHtml?, includeRuns?, includeParagraphs?, includeEmbeds? }` | 统一目标身份 + `{ blockId, content, html?, canonicalHtml?, plainText/displayText, displayLength, indexText, displayIndexMap, length, indexUnit, indexModel, terminalNewline, contentHash, htmlHash, hyperlinkMetadataHash, canonicalized, roundTripSafe, roundTripWarnings, paragraphs?, runs?, embeds?, hyperlinks, orphanedHyperlinkMetadata, defaultStyle, layout, geometry }`；拼音 word 只在显示文本中展开，写入范围使用结构索引 |
+| `formatText(payload)` 的 MCP 默认样式别名 | `editor_text_set_style({ ...selector, style, expectedContentHash?, fitSize?, waitMs? })` | 等价于 `formatText({ scope: 'default', formats: style })`；只接受默认字体/字号/颜色/粗斜体/行距/字距等字段，不强行覆盖已有内联 run |
+| `editText(payload)` | `{ ...selector, action: insert/replace/delete/findReplace, index?, length?, text?, html?, match?, occurrence?, caseSensitive?, replaceAll?, expectedContentHash?, dryRun?, fitSize?, waitMs? }` | 统一目标身份 + `{ action, dryRun, changed, changes[], beforeHash, previousContentHash, contentHash, plainText, content, canonical, indexUnit, indexModel, width?, height?, moved? }`；insert 用 index，replace/delete 用 index+length，只有 findReplace 用 match；findReplace 省略 text/html 时删除匹配 |
+| `setTextLink(payload)` | `{ ...selector, index, length, hyperlinkId?, hyperlink?, expectedContentHash?, dryRun?, fitSize?, waitMs? }` | 统一目标身份 + `{ changed, dryRun, range, hyperlinkId, hyperlink, previousContentHash, contentHash, plainText, content, width?, height?, moved? }`；原子设置链接格式并同步 hyperlinkParamList。新链接的 `hyperlink.hyperlink_id` 可省略，由 Bridge 生成并以返回的 `hyperlinkId` 为准。兄弟单元格/节点仍引用同一 id 时，单目标 metadata 修改返回 `TEXT_HYPERLINK_SHARED`，应省略 id 新建独立链接。URL 元数据用 `input_type/link_mode/jump_type=1/link_address/agent_id=0/agent_params=[]`；智能体用 jump_type=2 和真实 agent_id/agent_params |
+| `removeTextLink(payload)` | `{ ...selector, hyperlinkId? }` 或 `{ ...selector, index, length }`，另支持 expectedContentHash/dryRun/fitSize/waitMs | 统一目标身份 + `{ changed, dryRun, ranges[], hyperlinkId, previousContentHash, contentHash, plainText, content, width?, height?, moved? }`；清理不再被正文引用的链接元数据 |
+| `editTextEmbed(payload)` | `{ ...selector, action: insert/update/delete, index, embedType?, value?, expectedContentHash?, dryRun?, fitSize?, waitMs? }` | 统一目标身份 + `{ action, changed, dryRun, index, embedType, value, previousContentHash, contentHash, plainText, content, embeds[] }`；支持 formulaMath/pinyinBox/image。image 使用完整 ImageBot 对象，可含 url、宽高/原始宽高、rotate/opacity/flip、描边、verticalAlign、offsetX/Y；blot 未注册或未保留完整 value 时返回 TEXT_EMBED_NOT_REGISTERED |
+| `formatText(payload)` | `{ ...selector, scope: default/all/range/match/paragraph, index?, length?, match?, occurrence?, paragraphIndexes?, formats, expectedContentHash?, dryRun?, fitSize?, waitMs? }`；`paragraphIndexes` 为 0-based | 统一目标身份 + `{ scope, appliedFormats, dryRun, changed, ranges?, beforeHash?, previousContentHash?, contentHash?, content?, beforeStyle?, afterStyle?, width?, height?, moved? }` |
+| `setTextLayout(payload)` | `{ elementId, layout, fitSize?, waitMs? }`；不接受 expectedContentHash/dryRun；layout 支持 extendType/maxWidth/maxHeight、overflowType 数组、padding、横竖排/对齐、background、fill `{enabled?,color?}`、outline/shadow/borderRadius | `{ elementId, before, layout, geometry, changedKeys, width, height, dWidth, dHeight, rendered, settled, deferredLayout, moved[] }`；嵌套外观对象深合并 |
+| `inspectTextLayout(payload)` | `{ elementId }` | `{ elementId, rendered, measurement?, geometry, overflow, clipped, needResetSize, fontNames, roundTripSafe, extendType, overflowType, paragraphCount, runCount, embedCount, textLength, defaultStyle, warnings[] }`；measurement 含内容/容器宽高和 overflowX/overflowY/overflow |
+| `fitTextToBox(payload)` | `{ elementId, minFontSize?, maxFontSize?, step?, expectedContentHash?, allowUniformizeMixedSizes?, waitMs? }`（保持文本框宽高不变并缩小字号；不接受 dryRun） | 返回 `{ applied, fitted, overflow, reason?, previousFontSize?, fontSize?, inspectionBefore, inspectionAfter?, fits?, attempts?, reachedMinimum?, fontSizes?, invalidFontSizes?, requiresExplicitUniformization?, uniformizedMixedSizes?, contentHash }`；混合/不可解析字号默认 `reason=mixed-font-sizes` 且零写入，只有明确传 `allowUniformizeMixedSizes=true` 才统一字号；未渲染或已放入时 `applied:false` 并给出原因，不伪装完成 |
+| `searchTextElements(payload)` | `{ query, blockId?, targetKinds?: ['element','tableCell','mindNode'], caseSensitive?, wholeWord?, useRegex?, limit? }` | `{ query, scope, blockId, targetKinds, searchedTargets, searchedElements, total, truncated, warnings[], ranges[], items[], matches[] }`；默认搜索三类目标，每个命中带统一目标身份、可直接写入的 index/length 和仅供展示的 displayIndex/displayLength；仅搜索当前已加载目录，matches 为兼容平铺结果 |
+| `copyTextStyle(payload)` | source 从 `sourceElementId/sourceTarget` 二选一，targets 从 `targetElementIds/targetTargets` 二选一；两侧可混用；另有 `scope?: default/character/paragraph/layout/all, fitSize?, waitMs?` | `{ sourceElementId, sourceTarget, targetElementIds, targetTargets, scope, copied, results }`；保留目标文本内容。嵌套目标支持 default/character/paragraph；layout/all 仅支持独立文本并对嵌套目标返回 `TEXT_LAYOUT_TARGET_UNSUPPORTED` |
+| `listTextFonts(payload)` | `{ language?: all/chinese/english/number }` | `{ language, items: [{ label, value, source, available, languages[] }] }` |
+
+嵌套目标的内容写入可能返回 `rendered=true` 但 `settled=false/deferredLayout=true`，表示 Bridge 已请求领域
+重排但无法独立验证表格或思维导图布局稳定；此时必须复读内容并截图核对外层元素。嵌套目标的
+`width/height/dWidth/dHeight/autoResized` 为 `null`，不能当作独立文本框几何使用。
+
+文本索引统一采用 UTF-16 / Quill 语义，公式、图片、拼音等内嵌对象长度按 1 计算。
+`plainText/displayText` 会展开拼音 word，不能把它的下标直接当 Quill index；使用 paragraphs/runs/embeds
+或搜索返回的 index/length。超链接必须使用
+`setTextLink/removeTextLink`，公式、拼音和内嵌图片必须使用 `editTextEmbed`；不要把这些格式直接塞给
+`formatText`。安全往返检查会保护任意 data-* 节点、answer-tag、phoneme，以及图片/拼音/链接的尺寸、
+样式和语义属性；注册不完整时拒绝覆盖。写操作若带
+`expectedContentHash`。`contentHash` 联合覆盖 canonical HTML 与稳定排序后的 `hyperlinkParamList`，所以正文或仅链接参数变化时都必须拒绝覆盖；`htmlHash`、`hyperlinkMetadataHash` 仅供分项诊断，不能代替并发校验。批量查找替换和格式化优先用 `dryRun` 核对命中范围。
+`fitTextSize` 会让文本框按内容和 `extendType` 改变尺寸，不改正文且不接受 expectedContentHash/dryRun；
+`fitTextToBox` 则保持文本框尺寸并缩小字号，接受 expectedContentHash 但不接受 dryRun，二者不可互换。
+混合字号只有在用户明确同意统一后才传 `allowUniformizeMixedSizes=true`。不要用 `updateElement` 直接拼接富文本 HTML，以免破坏超链接、公式、列表和格式范围。
+读取及内容写入共用有界 canonical 稳定化：最多 5 轮 `parse → production convertHTML`，相邻两轮
+完全一致才返回或落库；每轮执行安全往返检查，超限抛 `TEXT_CANONICALIZATION_UNSTABLE`。
 
 ### 数据交换（备份 / 整页导入导出）
 
@@ -309,6 +446,8 @@
 - **id 生成与替换**：新增元素必须生成唯一 `id`，并设置 `templateId = 所在区块 uuid`、`groupId = 0`；打组后子元素 `groupId = 组 id`；复制/深拷贝时用 `replaceElementsId` 同步替换所有子级 `groupId`。
 - **高度联动**：增删改元素后调用 `updateTemplateHeightByElementList(templateId)`（现有 action 已处理）。
 - **错误处理**：任何失败都 reject，消息要可读（例如 `区块不存在: xxx`）。
+- **数字模块 ID 不变量**：元素的 `templateId` 和区块操作使用模板 `uuid`；数字模块 `hypermedia_content_id` 只能使用所属模板后端 `id`。模板尚无后端 `id` 时先保存/刷新内容，仍无 `id` 则拒绝写入。
+- **即时持久化边界**：数字模块、目录题目、题目讲解和书本/目录写操作直接请求后端，不属于当前页 JSON 快照；不得承诺可由 `rollback()` 或稍后的 `save()` 回滚。
 - **不要**在桥接里直接 `commit` 绕过日志的 mutation（除非该动作本身无操作日志需求）。
 
 
