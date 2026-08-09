@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor State"
+  short_description: "Read the smallest necessary editor state"
+  default_prompt: "Use $super-editor-state to inspect only the editor state needed for this task."

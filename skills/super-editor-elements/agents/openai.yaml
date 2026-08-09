@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Elements"
+  short_description: "Manage element geometry, groups, and structure"
+  default_prompt: "Use $super-editor-elements to inspect and modify the requested element structure."

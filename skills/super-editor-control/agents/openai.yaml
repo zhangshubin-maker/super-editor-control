@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Control"
+  short_description: "Route safe Super Editor authoring workflows"
+  default_prompt: "Use $super-editor-control to route this courseware task at the smallest safe scope."

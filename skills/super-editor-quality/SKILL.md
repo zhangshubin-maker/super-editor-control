@@ -6,6 +6,9 @@ description: 超媒编辑器课件质量审计、当前页保存回读与版本�
 
 验证 AI 的当前改动已按目标核对并保存，报告 Bridge 实际能够发现的问题。不要把静态审计结果描述为教学正确、引用完整、互动可用或视觉无遮挡的证明。
 
+范围、checkpoint、保存、dirty 切页和持久化域以公共
+[任务策略](../super-editor-control/references/task-policy.md)为准；本技能只补充审计和回读要求。
+
 ## 1. 按 micro / current / book 选择范围
 
 - **micro**：用对应读取工具复读明确目标；不调用 `editor_audit_content`，但画布 dirty 时仍用 `editor_save_verified(scope=current)` 保存回读。
@@ -32,6 +35,8 @@ description: 超媒编辑器课件质量审计、当前页保存回读与版本�
 - 表格和思维导图文本问题仍通过统一富文本 target 修复，不直接重写其内部结构。
 - 修复前重新读取目标；sourceHash 变化时放弃旧修复计划并重新审计。
 - Bridge 审计不验证深层大纲/锚点/目录跳转、题目和答案正确性、数字模块配置、全书术语一致性、元素互相遮挡或学生端互动。分别加载 outline/questions/digital-modules/text 或 book-authoring 搜索工具，并结合 canvas tree、截图和预览链路核对。
+- 当前没有自动视觉评分、像素级遮挡求解或跨页面风格一致性证明。结构树、文本布局和截图属于分层证据，
+  不是完整视觉验收；重要页面仍需预览检查并报告未自动覆盖项。
 
 ## 4. checkpoint 与持久版本
 

@@ -287,9 +287,16 @@ export const BOOK_AUTHORING_TOOLS = [
         expectedSlideId: {
           ...ID_SCHEMA,
           description: '并发保护：当前目录不一致时拒绝写入'
+        },
+        saveBeforeSwitch: {
+          type: 'boolean',
+          description: '目标不是当前页且当前页 dirty 时，先保存并回读再切换'
+        },
+        discardChanges: {
+          type: 'boolean',
+          description: '目标不是当前页且当前页 dirty 时，明确丢弃当前页改动再切换'
         }
       },
-      anyOf: [{ required: ['plan'] }, { required: ['guids'] }],
       additionalProperties: false
     }
   },
@@ -547,6 +554,14 @@ export function prepareBookAuthoringCall(name, args = {}) {
     case 'editor_render_questions_to_block':
       if (!hasOwn(args, 'plan') && !hasOwn(args, 'guids')) {
         throw new Error('必须提供 plan 或 guids')
+      }
+      for (const field of ['saveBeforeSwitch', 'discardChanges']) {
+        if (hasOwn(args, field) && typeof args[field] !== 'boolean') {
+          throw new Error(`${field} 必须是布尔值`)
+        }
+      }
+      if (args.saveBeforeSwitch === true && args.discardChanges === true) {
+        throw new Error('saveBeforeSwitch 与 discardChanges 不能同时为 true')
       }
       if (hasOwn(args, 'plan') && (!args.plan || typeof args.plan !== 'object' || Array.isArray(args.plan))) {
         throw new Error('plan 必须是对象')

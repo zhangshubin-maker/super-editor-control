@@ -23,6 +23,8 @@ const MAX_INLINE_FILE_BYTES = 70 * 1024 * 1024
 let active = null // { mode: 'rpc'|'mock', origin, instanceId, page }
 let connectPromise = null
 let pinnedWindowId = null
+let mockDirty = process.env.SUPER_EDITOR_MOCK_DIRTY === '1'
+const mockBridgeCalls = []
 
 class RpcBridgeError extends Error {
   constructor(code, message) {
@@ -402,7 +404,10 @@ export async function getStatus() {
 }
 
 export async function bridgeCall(method, args = []) {
-  if (MOCK) return mockResult(method, args)
+  if (MOCK) {
+    mockBridgeCalls.push({ method, args })
+    return mockResult(method, args)
+  }
   const connection = await ensureConnected()
   try {
     return await rpcRequest(method, args, connection.instanceId)
@@ -551,6 +556,8 @@ function mockResult(method, args = []) {
   switch (method) {
     case 'ping':
       return { version: '1.6.0', editorType: 'content-editor', bookId: 'mock-book', mode: 'ai-control' }
+    case 'getMockCallLog':
+      return mockBridgeCalls
     case 'getUserInfo':
       return { uid: 'mock-user', name: '示例用户', nickname: '示例用户' }
     case 'searchBooks':
@@ -672,6 +679,7 @@ function mockResult(method, args = []) {
       }
     }
     case 'saveVerified':
+      mockDirty = false
       return {
         scope: arg.scope || 'current',
         saved: true,
@@ -866,7 +874,7 @@ function mockResult(method, args = []) {
         ],
         currentSlideId: 'slide-1',
         selection: [],
-        dirty: false
+        dirty: mockDirty
       }
     case 'listSlides':
       return mockResult('getState').slides
@@ -914,18 +922,19 @@ function mockResult(method, args = []) {
       const slideId = String(payload.slideId)
       const previousSlideId = 'slide-1'
       const changed = slideId !== previousSlideId
-      const dirtyAction = changed
-        ? payload.saveBeforeSwitch
-          ? 'saved'
-          : payload.discardChanges
-            ? 'discarded'
-            : 'none'
-        : 'none'
+      const dirtyBefore = changed && mockDirty
+      let dirtyAction = 'none'
+      if (dirtyBefore) {
+        if (payload.saveBeforeSwitch) dirtyAction = 'saved'
+        else if (payload.discardChanges) dirtyAction = 'discarded'
+        else throw new Error('当前页面有未保存改动；请先保存或明确丢弃')
+        mockDirty = false
+      }
       return {
         slideId,
         previousSlideId,
         changed,
-        dirtyBefore: dirtyAction !== 'none',
+        dirtyBefore,
         dirtyAction
       }
     }
@@ -946,6 +955,68 @@ function mockResult(method, args = []) {
     case 'redo':
     case 'save':
       return null
+    case 'moveElements':
+      return {
+        elementCount: (arg.elementIds || []).length,
+        x: arg.x,
+        y: arg.y,
+        dx: 0,
+        dy: 0,
+        coordinateSpace: 'block'
+      }
+    case 'moveElementsByOffset':
+      return {
+        elementCount: (arg.elementIds || []).length,
+        dx: arg.dx || 0,
+        dy: arg.dy || 0,
+        coordinateSpace: 'block'
+      }
+    case 'alignElements':
+      return {
+        align: arg.align,
+        target: arg.target || 'selection',
+        elementCount: (arg.elementIds || []).length,
+        coordinateSpace:
+          arg.coordinateSpace || (arg.target === 'page' ? 'page' : 'block')
+      }
+    case 'setElementSpacing':
+      return {
+        direction: arg.direction,
+        spacing: arg.spacing,
+        elementCount: (arg.elementIds || []).length,
+        coordinateSpace: 'block'
+      }
+    case 'centerElementInBlock':
+      return {
+        elementId: String(arg.elementId),
+        blockId: 'block-1',
+        axis: arg.axis || 'both',
+        coordinateSpace: 'block'
+      }
+    case 'getElementsBounds': {
+      const options = (args && args[1]) || {}
+      return {
+        minX: 10,
+        minY: 20,
+        maxX: 210,
+        maxY: 120,
+        width: 200,
+        height: 100,
+        centerX: 110,
+        centerY: 70,
+        coordinateSpace: options.coordinateSpace || 'block'
+      }
+    }
+    case 'getCanvasInfo':
+      return {
+        slideId: 'slide-1',
+        canvasWidth: 794,
+        canvasHeight: 1123,
+        scale: 1,
+        viewportLeft: 0,
+        viewportTop: 0,
+        stats: { blockCount: 1, elementCount: 1, typeCounts: { text: 1 } }
+      }
     case 'fitTableHeights':
       return { tableId: arg.tableId, changed: true, heights: [32, 70], oldHeights: [45, 85], height: 102 }
     case 'getTableInfo':

@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v1.7）
+# window.__superEditor 桥接 API 契约（v1.8）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -50,14 +50,15 @@
 
 // getSlide(slideId) 返回
 {
-  slide: { id, name, size: { width, height }, background },
-  blocks: [ { id, uuid, name, size: { width, height }, elements: [ element ] } ]
+  slide: { id, name, pageId },
+  blocks: [ { uuid, name, size: { width, height }, elements: [ element ] } ]
 }
 ```
 
 > `id` 与 `uuid` 不可互换。数字模块桥接只接收 `elementId`，由桥接在当前页元素树中找到
 > 所属模板并读取模板后端 `id`；不得让调用方填写 `hypermedia_content_id`，更不得把 `uuid`
-> 转成数字后提交。
+> 转成数字后提交。`getSlide` 是规范化的页面内容快照，区块项不承诺返回后端 `id`；需要后端内容 id 时
+> 使用 `getBlock` / `listBlocks` 的 `backendId`（同值也以 `hypermediaContentId` 暴露），不要从 `uuid` 推导。
 
 ## 4. 方法清单
 
@@ -96,16 +97,16 @@
 | `getQuestionExplanations(payload)` | `{ guids, includeRaw? }` | 按 GUID 分组的已保存题目 AI 讲解记录 |
 | `getQuestionExplanationStatus(payload)` | `{ guids, bookId?, includeResults? }` | 单次查询每题异步生成状态；可附已完成结果 |
 | `getSlide(slideId)` | string | 见上 |
-| `getBlock(blockId)` | string | `{ blockId, name, size, elements }`（单区块含元素树） |
-| `getElement(elementId)` | string | 元素完整数据（含 `blockId`） |
-| `listElements(filter?)` | `{ blockId?, type? }` | 扁平元素列表 `[{ id, name, type, left, top, width, height, blockId }]` |
+| `getBlock(blockId)` | string | `{ blockId, backendId, hypermediaContentId, name, size, elements }`（单区块含元素树） |
+| `getElement(elementId)` | string | 元素完整数据，并补充 `{ blockId, blockBackendId, hypermediaContentId }` |
+| `listElements(filter?)` | `{ blockId?, type? }` | 扁平元素列表 `[{ id, name, type, left, top, width, height, blockId, blockBackendId }]` |
 | `findElements(filter?)` | 同 `listElements` | 同 `listElements`（别名） |
-| `getCanvasTree()` | 无 | 整页结构化树：`{ slide, blocks: [{ blockId, index, name, size, elementCount, elements }], stats: { blockCount, elementCount, typeCounts } }`（AI 理解画布首选） |
+| `getCanvasTree()` | 无 | 整页结构化树：`{ slide, blocks: [{ blockId, backendId, index, name, size, elementCount, elements }], stats: { blockCount, elementCount, typeCounts } }`（AI 理解画布首选） |
 | `getSlideStats()` | 无 | `{ blockCount, elementCount, typeCounts, wordCount }` |
-| `listBlocks()` | 无 | `[{ blockId, index, name, size, elementCount }]` |
+| `listBlocks()` | 无 | `[{ blockId, backendId, index, name, size, elementCount }]` |
 | `getBlockIndex(blockId)` | string | 区块在当前页原始下标 |
 | `searchElements(filter?)` | `{ keyword?, type?, blockId? }` | 按名称/内容/类型搜索 `[{ id, name, type, left, top, width, height, blockId, inGroup }]` |
-| `getElementsBounds(elementIds)` | `string[]`（顶层元素） | `{ minX, minY, maxX, maxY, width, height, centerX, centerY }`（包围盒） |
+| `getElementsBounds(elementIds, options?)` | `(string[]（顶层元素）, { coordinateSpace?: block/page })`；默认 `block` | `{ minX, minY, maxX, maxY, width, height, centerX, centerY, coordinateSpace }`；`block` 只接受同一 owner 区块，`page` 可跨区块并使用 `blockTemplateListTopMap` 换算整页 Y |
 | `getHistoryState()` | 无 | `{ canUndo: false, canRedo: false, undoDisabled: true, reason, checkpointCount, checkpoints: [{ checkpointId, slideId, label, time }] }` |
 | `listElementTypes()` | 无 | `[{ type, name, defaultWidth, defaultHeight }]`（全部元素类型） |
 | `getElementSchema(type)` | string | `{ type, typeName, defaults, commonProps, typeProps }`（该类型默认结构与可设置字段） |
@@ -115,10 +116,10 @@
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
-| `selectSlide(slideIdOrOptions)` | `slideId` 标量，或 `{ slideId, saveBeforeSwitch?, discardChanges? }`；两个安全选项不能同时为 true | `{ slideId, previousSlideId, changed, dirtyBefore, dirtyAction }`；dirty 时必须明确保存或丢弃，标量调用保持兼容 |
-| `addSlide(payload)` | `{ name?, parentId?, template_id?, type? }`（不传 template_id 时自动复用/创建空白样章模板） | `{ slideId }` |
-| `applyTemplate(payload)` | `{ kind: chapter/block, templateId, name?, parentId?, index?, afterBlockId? }` | 样章返回 `{ slideId }`；区块返回 `{ templateId, blockId }` |
-| `deleteSlide(slideId)` | string | 无 |
+| `selectSlide(slideIdOrOptions)` | `slideId` 标量，或 `{ slideId, saveBeforeSwitch?, discardChanges? }`；两个安全选项不能同时为 true | `{ slideId, previousSlideId, changed, dirtyBefore, dirtyAction }`；切到其他页且当前页 dirty 时必须明确保存或丢弃，切到当前页不处理 dirty |
+| `addSlide(payload)` | `{ name?, parentId?, template_id?, type?, saveBeforeSwitch?, discardChanges? }`（不传 template_id 时自动复用/创建空白样章模板） | `{ slideId }`；创建前先校验 dirty 处理意图，再写入目录并安全切到新页 |
+| `applyTemplate(payload)` | `{ kind: chapter/block, templateId, name?, parentId?, index?, afterBlockId?, saveBeforeSwitch?, discardChanges? }` | 样章委托 `addSlide` 并返回 `{ slideId }`；区块模板只写当前页并返回 `{ templateId, blockId }` |
+| `deleteSlide(slideIdOrOptions)` | `slideId` 标量，或 `{ slideId, saveBeforeSwitch?, discardChanges? }` | 无；删除当前 dirty 页时必须显式选择保存或丢弃，删除非当前页不切页 |
 | `renameSlide(slideId, name)` | (string, string) | 无（目录重命名，即时生效） |
 | `duplicateSlide(slideId)` | string | `{ slideId }`（服务端复制整页含内容） |
 | `getSlideMenu()` | 无 | 目录树（当前 store 内的书本目录） |
@@ -129,40 +130,53 @@
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
-| `addBlock(payload)` | `{ afterBlockId?, size? }` | `blockId` |
-| `cloneBlock(blockId, opts?)` | `(uuid, { afterBlockId?, name? })` | `blockId`（新，元素 id 自动重生成） |
+| `addBlock(payload)` | `{ afterBlockId?, size? }` | `{ blockId }` |
+| `cloneBlock(blockId, opts?)` | `(uuid, { afterBlockId?, name? })` | `{ blockId }`（新区块 uuid 和全部 element id 自动重生成） |
 | `updateBlock(payload)` | `{ blockId, patch }`（patch 支持 `name`、`size` 等） | 无 |
 | `deleteBlock(blockId)` | string | 无 |
 | `moveBlock(payload)` | `{ blockId, toIndex }` | 无 |
 | `insertBlocks(blocks, opts?)` | `(模板数组, { index? })` | `{ blockIds }`（批量插入，uuid 自动重新生成，元素 id 冲突自动替换） |
-| `importBlocks(slideId, blocks, opts?)` | `(string, 模板数组, { index? })` | `{ slideId, blockIds }`（跨页导入：自动切换到目标页并插入） |
-| `replaceBlock(blockId, templateData)` | (string, 模板对象) | `{ blockId }`（整体替换区块内容，保持原位置与原 uuid） |
+| `importBlocks(slideId, blocks, opts?)` | `(string, 模板数组, { index?, saveBeforeSwitch?, discardChanges? })` | `{ slideId, blockIds }`；目标不是当前页时先按 dirty 安全选项切换，再插入 |
+| `replaceBlock(blockId, templateData)` | (string, 模板对象) | `{ blockId }`；整体替换内容并保持目标位置与原 block uuid，保留传入 element id；写前拒绝模板内部重复 id 及与其他区块的 id 冲突 |
 | `renameBlock(blockId, name)` | (string, string) | 无 |
-| `copyBlockToSlide(blockId, targetSlideId, opts?)` | `(string, string, { index? })` | `{ slideId, blockIds }`（跨页复制；目标页不同时当前页会切到目标页） |
-| `insertTemplate(templateData, index?)` | 模板结构对象 + 插入位置（省略追加末尾） | `blockId`（原样插入，元素 id 保留；用于恢复/迁移区块） |
+| `copyBlockToSlide(blockId, targetSlideId, opts?)` | `(string, string, { index?, saveBeforeSwitch?, discardChanges? })` | `{ slideId, blockIds }`；跨页复制 dirty 源页只允许先保存，明确拒绝一边复制未保存源内容一边丢弃 |
+| `insertTemplate(templateData, index?)` | 模板结构对象 + 插入位置（省略追加末尾） | `{ blockId }`；作为**新区块**插入，统一重建 block uuid 和全部 element id，并同步子级 groupId/templateId，不保留源 id |
 | `applyComponent(payload)` | `{ componentId, blockId, scope?, left?, top? }` | `{ componentId, elementIds }`（自动换 id、定位并记录使用历史） |
+
+> **dirty 安全边界**：`selectSlide`、`addSlide`、删除当前页、跨页 `importBlocks`、
+> `applyTemplate(kind=chapter)`、跨页 `copyBlockToSlide` 和跨页 `replaceSlideContent` 都复用安全切页链。dirty 时省略两个选项会在任何
+> 目录/画布写入前拒绝，同时传入也会拒绝；`discardChanges` 必须来自明确意图。插件 typed MCP 在
+> `saveBeforeSwitch=true` 时会先调用 `saveVerified(scope=current, verify=true, expectedSlideId)` 保存并回读，
+> 再调用 Bridge。直接调用 Bridge 若也要求服务端回读，应先显式 `saveVerified`，不要把 legacy `save()`
+> 当作已验证保存。删除当前页时丢弃动作延迟到后端删除成功；删除失败会恢复原页内容、选区和 dirty 状态。
+> 页面新增、删除、应用样章均跨越后端和本地切页步骤，不是事务；遇到结果未知时先复读目录状态，禁止盲目重放。
+
+> **模板/组件预检**：应用模板必须提供有效 `templateId`；`afterBlockId` 必须在当前页存在。
+> 应用组件必须提供可访问的精确 `componentId` 和当前页 `blockId`，并在首个 `addElement` 前完成 content JSON、
+> 组件内部 element id 唯一性、有限坐标及整体 bounds 不越出 owner 区块的检查。组件过大时先扩展区块或缩小素材，
+> 不允许部分插入后再依赖回滚纠正几何。
 
 ### 元素（element）
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
-| `addElement(payload)` | `{ blockId, type, payload }` | `elementId` |
+| `addElement(payload)` | `{ blockId, type, payload }` | `{ elementId }`；省略位置时按 **owner 区块尺寸**居中，不使用整页 viewport；统一重建传入元素树 id 并在写入前校验有限几何和 owner bounds |
 | `applyLibraryImage(payload)` | `{ imageId? or url?, blockId? or elementId?, scope?, left?, top?, width?, height?, name?, fixedRatio? }` | `{ imageId, url, elementId }`（新增或替换图片，并记录素材使用历史） |
-| `updateElement(payload)` | `{ elementId, patch }` | 无 |
+| `updateElement(payload)` | `{ elementId, patch }` | 无；patch 含 `left/top/x/y/width/height/rotate` 时先归一化数值并做 owner bounds 零写入预检；组元素拒绝直接通用几何更新 |
 | `deleteElement(elementId)` | string | 无 |
-| `moveElement(payload)` | `{ elementId, x, y }` | 无 |
-| `resizeElement(payload)` | `{ elementId, width, height }` | 无 |
-| `rotateElement(payload)` | `{ elementId, angle }` | 无 |
-| `duplicateElement(elementId)` | string | `elementId`（新） |
-| `addElements(payload)` | `{ blockId, elements: [{ type, payload }] }` | `{ elementIds }`（批量新增） |
-| `updateElements(payload)` | `{ elementIds, patch }` | 无（批量改属性，一次 dispatch） |
+| `moveElement(payload)` | `{ elementId, x, y }` | 无；owner-local 绝对坐标，有限值及 owner bounds 校验同 `updateElement` |
+| `resizeElement(payload)` | `{ elementId, width, height }` | 无；宽高必须为有限正数，并按缩放后的旋转包围盒做 owner 区块边界预检，组元素拒绝直接缩放 |
+| `rotateElement(payload)` | `{ elementId, angle }` | 无；角度必须为有限数，并按旋转后的真实包围盒做 owner 区块边界预检，组元素拒绝直接旋转 |
+| `duplicateElement(elementId)` | string | `{ elementId }`；递归换 id 后默认 +20/+20，候选副本越出 owner 区块时零写入拒绝 |
+| `addElements(payload)` | `{ blockId, elements: [{ type, payload }] }` | `{ elementIds }`；整批先重建 id、检查批内唯一性和 owner bounds，再逐项新增；中途失败补偿删除已新增项并报告 `rollbackApplied/rollbackFailures` |
+| `updateElements(payload)` | `{ elementIds, patch }` | 无；几何 patch 先对全部目标完成 owner bounds 预检，全部通过后才一次 dispatch，任一失败零写入 |
 | `deleteElements(elementIds)` | `string[]` | 无 |
-| `duplicateElements(elementIds, opts?)` | `(string[], { offsetX?, offsetY? })` | `{ elementIds }`（批量复制，默认 +20/+20） |
-| `moveElements(payload)` | `{ elementIds, x, y }` | 无（顶层元素左上角移到指定点） |
-| `moveElementsByOffset(payload)` | `{ elementIds, dx?, dy? }` | 无（相对偏移） |
-| `alignElements(payload)` | `{ elementIds, align, target? }`，align ∈ `top/bottom/left/right/horizontal/vertical/center/hdengju/vdengju`，target ∈ `selection/canvas` | `{ align, target, elementCount }`（对齐/等间距，与编辑器快捷键一致） |
-| `setElementSpacing(payload)` | `{ elementIds, direction: horizontal/vertical, spacing }` | `{ direction, spacing, elementCount }`（按方向重排为等间距） |
-| `centerElementInBlock(payload)` | `{ elementId, axis: horizontal/vertical/both }` | 无（在所属区块内居中） |
+| `duplicateElements(elementIds, opts?)` | `(string[], { offsetX?, offsetY? })` | `{ elementIds }`；默认 +20/+20，复制树递归换 id，全部候选先做 owner bounds 预检；中途失败补偿删除已新增副本 |
+| `moveElements(payload)` | `{ elementIds, x, y }` | `{ elementCount, x, y, dx, dy, coordinateSpace: block }`；只接受同一 owner 区块的顶层元素，`x/y` 是**整个选择集包围盒**的目标 `minX/minY`，所有元素保持相对位置，不是把每个元素重叠到同一点 |
+| `moveElementsByOffset(payload)` | `{ elementIds, dx?, dy? }` | `{ elementCount, dx, dy, coordinateSpace: block }`；每个元素在自己的 owner-local 坐标中偏移，写前统一做 owner 边界预检 |
+| `alignElements(payload)` | `{ elementIds, align, target?, coordinateSpace? }`，align ∈ `top/bottom/left/right/horizontal/vertical/center/hdengju/vdengju`，target ∈ `selection/block/page`（`canvas` 是 `page` 兼容别名），coordinateSpace ∈ `block/page` | `{ align, target, elementCount, coordinateSpace }`；`selection` 可按选择集对齐或等间距，`block/page` 是外部参照 |
+| `setElementSpacing(payload)` | `{ elementIds, direction: horizontal/vertical, spacing }` | `{ direction, spacing, elementCount, coordinateSpace: block }`（按方向重排为精确间距） |
+| `centerElementInBlock(payload)` | `{ elementId, axis: horizontal/vertical/both }` | `{ elementId, blockId, axis, coordinateSpace: block }` |
 | `lockElements(elementIds, locked?)` | `(string[], boolean)` | 无（isLock） |
 | `hideElements(elementIds, hidden?)` | `(string[], boolean)` | 无（isHidden） |
 | `setElementOpacity(payload)` | `{ elementId, opacity: 0~1 }` | 无 |
@@ -173,11 +187,27 @@
 | `setTextStyle(payload)` | `{ elementId, style: { fontSize?, color?, lineHeight?, fontName?, fontWeight?, verticalAlign?, wordSpace?, adaptive? } }` | 无（映射到文本元素顶层样式字段） |
 | `orderElement(payload)` | `{ elementId, position }`，position ∈ `front/forward/backward/back` | 无 |
 
+布局坐标和写入边界遵循以下不变量：
+
+- `block` 坐标是元素所属区块的 owner-local 坐标；同一 `block` 计算必须来自同一 owner。
+- `page` 坐标只用于计算和返回，Y 通过 `blockTemplateListTopMap[block.uuid]` 加上 owner-local Y；
+  计算出的移动量最终仍写回各元素自己的 owner-local `left/top`。
+- 跨区块 `selection` 对齐必须显式传 `coordinateSpace: page`；`target: block` 只能用 `block`，
+  `target: page` 只能用 `page`；等间距只支持 `target: selection`。
+- `addElement(s)` 省略坐标时使用目标区块尺寸居中；显式几何、通用 `updateElement(s)` 几何 patch 和
+  `duplicateElement(s)` 偏移都会先检查有限数、正宽高、旋转后真实 bounds 及 owner 边界。批量调用在
+  首个写入前验证全部候选；只有底层 dispatch 运行时失败才进入已记录项的补偿回滚。
+- `moveElements`、`moveElementsByOffset`、`alignElements`、`setElementSpacing`、
+  `centerElementInBlock`、`resizeElement`、`rotateElement` 都先计算所有候选几何并检查 owner 边界；
+  任一元素会越界时在首个位置/尺寸写入前整体拒绝。page 对齐不授予元素越过 owner 区块的权限。
+- 组移动会把同一偏移写到叶子元素；组本身不能直接 resize/rotate。运行时写入异常会按已尝试叶子的
+  原始坐标补偿恢复，并在错误上报告 `rollbackApplied`。
+
 ### 打组
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
-| `groupElements(elementIds)` | `string[]` | `groupId` |
+| `groupElements(elementIds)` | `string[]` | `{ groupId }` |
 | `ungroup(groupId)` | string | 无 |
 
 ### 选中与视图（AI 控制增强）
@@ -330,16 +360,17 @@ type 82 中 `timeMode=0` 是正计时、`timeMode=1` 是倒计时；倒计时必
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
-| `createDigitalModule(payload)` | `{ elementId, type, name?, config?, replaceExisting?=false, validateOnly?=false }` | 新关系；默认遇到已有模块时报错，`validateOnly` 只返回后端请求预览 |
-| `updateDigitalModule(payload)` | `{ elementId, type?, name?, config?, replaceType?=false, validateOnly?=false }` | 更新后的关系；切换类型必须显式 `replaceType` |
-| `deleteDigitalModule(payload)` | `{ elementId }` | `{ deleted, elementId, relationId, modelId }` |
-| `copyDigitalModule(payload)` | `{ sourceElementId? or modelId?, targetElementId, replaceExisting?=false }` | 目标关系；当前复制为 `relation` 模式，复用同一个 `model_id` |
+| `createDigitalModule(payload)` | `{ elementId, type, name?, config?, replaceExisting?=false, validateOnly?=false }` | 新关系；已有模块时默认拒绝，显式替换会携带现有关系/模型 id 向 `addControlModel` 发**一次更新请求**，不先删；`validateOnly` 只返回请求预览 |
+| `updateDigitalModule(payload)` | `{ elementId, type?, name?, config?, replaceType?=false, validateOnly?=false }` | 更新后的关系；切换类型必须显式 `replaceType`，保留现有关系/模型/内容实体 id 并单次调用 `addControlModel`，不执行 delete-first |
+| `deleteDigitalModule(payload)` | `{ elementId, ignoreMissing?=true }` | `{ deleted, missing?, elementId, relationId?, modelId?, type?, typeName?, name? }` |
+| `copyDigitalModule(payload)` | `{ sourceElementId? or modelId?, targetElementId, replaceExisting?=false }` | 仅目标为空时建立 `relation` 并复用同一个 `model_id`；目标已有模块时始终拒绝，`replaceExisting=true` 也不会先删 |
 
 - 类型 `61/76/77/78/79/80/81/82/83/85/86/87/93/94/96/98/99` 提供语义化配置适配；其中 `94` 需要已生成的讲解 ID，`98` 只关联已完成生成的播客资源。类型清单会明确其余类型的支持程度和资源要求。
 - 模块名优先使用调用方名称，其次根据 URL、媒体名、目标或题目生成；仍无法生成时使用模块类型中文名。
 - `77` 音频和 `78` 视频可使用素材库 URL、AI 生成资源 URL，或先调用 `uploadFile` 上传本地文件，再把上传结果交给配置适配器。
 - `82/83/93/94` 等题目型模块使用题目/子题 GUID，不使用题目数字 `id`、目录 `id` 或展示序号；type 82/94 还须遵守上一节的组合校验和讲解记录 ID 规则。
-- `copyDigitalModule` 对齐现有 `addcontrolmodelrelation`：源与目标共享 `model_id`，修改共享模型可能影响所有关系；当前版本不声明独立深复制。
+- `copyDigitalModule` 对齐现有 `addcontrolmodelrelation`：源与目标共享 `model_id`，修改共享模型可能影响所有关系；当前版本不声明独立深复制。若业务确实要覆盖，只能显式 `deleteDigitalModule` 后再复制；这两个立即持久化请求**不是事务**，删除成功而复制失败时不会自动恢复旧关系，因此不得包装成“安全覆盖”。
+- 数字模块同元素更新和类型切换必须复用现有关系标识走单次 `addControlModel`；禁止为了改类型先调用 `deleteControlPosition`。只有用户明确删除模块时才调用删除接口。
 - `create/update/delete/copy` 成功后发送 `ELEMENT_DIGITAL_MODULE` 广播刷新编辑器侧面板。
 - 这些写操作不进入画布快照，`checkpoint`、`rollback` 和 `save` 都不能撤销；调用前必须先查询确认目标。
 
@@ -389,7 +420,7 @@ type 82 中 `timeMode=0` 是正计时、`timeMode=1` 是倒计时；倒计时必
 | `updateMindNode(payload)` | `{ mindId, nodeId, patch }`（color/fontsize/bold/italic/fontFamily/background/note/image/hyperlink/priority/progress/expandState 等，null 删除） | `{ mindId, nodeId, updated }` |
 | `setMindTemplate(payload)` | `{ mindId, template }`（default/right/left/right_angle/default_angle/left_angle/orthogonal） | `{ mindId, template }` |
 | `setMindTheme(payload)` | `{ mindId, theme }`（mind-default/retro/youth/minimalist/black） | `{ mindId, theme }` |
-Bridge 1.6.0 的结构化富文本内容级方法统一接受且只接受一种目标选择器：
+本契约的结构化富文本内容级方法统一接受且只接受一种目标选择器：
 
 - legacy 普通文本：`{ elementId }`；统一写法：`{ target: { kind: 'element', elementId } }`；
 - 表格单元格：`{ target: { kind: 'tableCell', tableId, cellId } }`，或用 0-based `row + col`
@@ -445,7 +476,7 @@ Bridge 1.6.0 的结构化富文本内容级方法统一接受且只接受一种�
 | 方法 | 参数 | 返回 |
 |------|------|------|
 | `exportSlide(slideId?)` | string（省略=当前页） | `{ slideId, blocks }`（整页完整数据，可用于备份/跨页复用） |
-| `replaceSlideContent(slideId, blocks)` | `(string, 模板数组)` | `{ slideId, blockIds }`（清空目标页后重建；传空数组=清空页面） |
+| `replaceSlideContent(slideId, blocks, options?)` | `(string, 模板数组, { saveBeforeSwitch?, discardChanges? })` | `{ slideId, blockIds }`；跨页时先安全切换，再清空目标页重建；传空数组=清空页面，失败会恢复调用前本地内容并报告 `rollbackApplied` |
 | `getBridgeInfo()` | 无 | `{ version, instanceId, windowId, bookId, methods }`（methods 为全部可用方法名） |
 | `batch(payload)` | `{ steps: [{ method, args }], stopOnError? }` | `{ results: [{ index, method, ok, value/error }], stopped, stoppedAt }`（一次往返串行执行多步，见下） |
 | `screenshot(payload)` | `{ fullPage?, blockId? }` | `data:image/png;base64,...`（默认当前视口；`fullPage: true` 全部区块拼接整页；`blockId` 指定单区块） |
@@ -461,7 +492,10 @@ Bridge 1.6.0 的结构化富文本内容级方法统一接受且只接受一种�
 - **不要**在桥接里直接 `commit` 绕过日志的 mutation（除非该动作本身无操作日志需求）。
 
 
-- 页面增删改会通过目录接口持久化（ddBookCatalog / deletecatalog / updatecatalogsort），其他写操作先入本地 store，save() 时统一提交。
+- 页面增删改会通过目录接口持久化（`addBookCatalog` / `deletecatalog` / `updatecatalogsort`），
+  大纲、目录题目、题目讲解和数字模块也各自立即写库；区块、元素、文本及应用到当前页的区块模板、
+  组件和图片先写本地工作副本，最后用 `saveVerified(scope=current)` 保存并回读。不能笼统地把“其他写操作”
+  都归到 `save()`，也不能承诺页面 checkpoint 能撤销立即持久化域。
 
 ## 6. 安全
 
@@ -496,8 +530,16 @@ Bridge 1.6.0 的结构化富文本内容级方法统一接受且只接受一种�
 - URL 带 `token` 时，普通浏览器可沿用既有鉴权；RPC broker 不参与业务登录。
 
 ### 7.2 参数约定（重要）
-- `getSlide(slideId)` / `deleteBlock(blockId)` 等方法的 id 参数仍使用**标量**（string/number）。`selectSlide` 是安全切页例外：兼容标量，也接受 `{ slideId, saveBeforeSwitch?, discardChanges? }`；只有需要明确处理 dirty 改动时才传对象。
+- `getSlide(slideId)` / `deleteBlock(blockId)` 等方法的 id 参数仍使用**标量**（string/number）。
+  `selectSlide` 和 `deleteSlide` 是安全切页例外：都兼容标量，也接受
+  `{ slideId, saveBeforeSwitch?, discardChanges? }`；dirty 当前页要离开或删除时必须传对象表达处理意图。
 - `addBlock({ afterBlockId?, size? })` 返回 `{ blockId }`；`addElement({ blockId, type, payload })` 返回 `{ elementId }`；新增后可立刻 `getSlide` 校验。
+- 高频只读入口优先使用 `getState`、`getCanvasTree`、`listBlocks`、`getBlock`、`getElement`、
+  `getElementsBounds`，不要为一个局部目标先导出整页。页面操作使用
+  `selectSlide/addSlide/deleteSlide/moveSlide/exportSlide/replaceSlideContent`；区块操作使用
+  `addBlock/cloneBlock/updateBlock/moveBlock/importBlocks/copyBlockToSlide/replaceBlock/deleteBlock`。
+- 视图定位使用 `scrollToBlock/scrollToElement/fitCanvas/getViewport`；它们不修改课件内容。
+  `getElementsBounds(ids, { coordinateSpace: 'page' })` 才是跨区块几何的标准入口，不要自行猜测区块累计高度。
 
 ### 7.3 文本元素样式模板（与产品风格一致）
 ```js
@@ -519,10 +561,23 @@ Bridge 1.6.0 的结构化富文本内容级方法统一接受且只接受一种�
 ### 7.4 画布渲染与验证
 - 编辑器画布是**虚拟滚动**：`#canvas-ref` 只渲染可视区块；`screenshot()` 用项目 `utils/html-to-image` 截图，`blockId` 模式定位 `#template-container-<uuid>`，`fullPage` 模式逐块截图拼接（ai_control 下区块全量渲染，均可截）。canvas 类区块（四线三格/手写格）与跨域图片可能渲染为空。
 - **滚动必须走桥接**：`scrollToBlock(blockId)` / `scrollToElement(elementId)` / `scrollCanvas({ deltaY })`（`scrollTop` 被自定义滚动接管，直接赋值无效；也不要用鼠标滚轮模拟）。
-- 元素坐标以 `getElement` / `listElements` 返回的 `left/top/width/height`（区块内相对坐标）为准；区块在画布中的绝对位置可用 `blockTemplateListTopMap` 换算。
-- 编辑前先 `getSlide` 全量 JSON 备份；保存后 `Page.reload` 再从服务端读取验证持久化。
+- 元素坐标以 `getElement` / `listElements` 返回的 `left/top/width/height`（owner 区块内相对坐标）为准；
+  需要整页坐标时调用 `getElementsBounds(ids, { coordinateSpace: 'page' })`，由 Bridge 使用
+  `blockTemplateListTopMap` 换算，调用方不要重复叠加。
+- 读取和保护范围按任务风险决定：明确的单元素小改只复读目标；多元素重排或结构改写才按需
+  `checkpoint`，高风险整页替换才考虑 `exportSlide`。保存使用 `saveVerified(scope=current)` 的服务端回读；
+  不再要求每次编辑前全量 `getSlide` 备份，也不以 `save() + Page.reload` 作为普通验证链。
 
 ### 7.5 页面增删（addSlide/deleteSlide 实测要点）
-- 后端 `addcatalogandtemplate` 校验 `template_id >= 1`：空字符串会被拒绝（`template_id 最小不能小于1`）。`addSlide` 不传 `template_id` 时桥接会自动：① 扫描模板库空白样章模板（无区块）复用；② 没有再调用 `addtemplate` 创建一个空白样章模板（按 book_id 缓存）。
-- `deleteSlide` 删除当前页后会自动切回目录第一页；删除前先 `getSlide` 备份。
+- 后端 `addcatalogandtemplate` 要求有效 `template_id`。`addSlide` 不传 `template_id` 时桥接会：
+  ① 扫描模板库中的空白样章模板（无区块）复用；② 没有时调用 `addtemplate` 创建空白样章模板并按
+  `book_id` 缓存。当前页 dirty 时，Bridge 在创建目录前就要求 `saveBeforeSwitch` 或 `discardChanges`。
+- `deleteSlide` 删除非当前页时不切页；删除当前页时优先安全切到现存的另一页，只有最后一页被删除时
+  才清空当前内容。dirty 丢弃会延迟到后端删除成功，删除请求失败则恢复原页内容、选区和 dirty；
+  不再假设总会“切回目录第一页”。是否额外导出备份按破坏性任务风险和用户意图判断，不是所有删除的固定前置步骤。
+- `addSlide` 的后端建目录、刷新目录树和本地切页不是原子事务。建目录成功但刷新/切页失败时，Bridge
+  先恢复原页内容、目录树、选区和 dirty，再自动尝试 `deletecatalog(addId)` 清理新目录。抛出的错误带
+  `createdSlideId`、`rollbackApplied`、`cleanupApplied` 和 `outcome`：
+  `created-slide-cleaned-up` 表示补偿删除成功；`orphan-slide-may-remain` 表示删除失败，并附
+  `cleanupFailure`。后者必须用 `listSlides/refreshSlideMenu` 复读后再决定人工补偿，不能直接重试创建。
 - 错误信息：轮询通道会把 axios 拦截器 reject 的 `response.data`（含 `msg` 字段）解析为可读文本；旧版直接 `String(err)` 会得到 `[object Object]`，已修复。

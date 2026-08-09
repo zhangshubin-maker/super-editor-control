@@ -1,4 +1,4 @@
 interface:
   display_name: "Super Editor Digital Modules"
-  short_description: "Manage interactive modules bound to editor elements"
-  default_prompt: "Use $super-editor-digital-modules to inspect the selected element and create, update, copy, or remove its digital module."
+  short_description: "Manage interactive modules bound to elements"
+  default_prompt: "Use $super-editor-digital-modules to inspect and manage the selected element interaction."

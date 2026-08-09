@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Outline"
+  short_description: "Manage page outlines, block links, and anchors"
+  default_prompt: "Use $super-editor-outline to inspect and manage the requested page outline relationships."

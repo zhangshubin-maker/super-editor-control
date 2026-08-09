@@ -4,6 +4,9 @@ description: 超媒编辑器（super-editor-control 插件）的富文本技能�
 ---
 # Super Editor Text（富文本控制）
 
+执行写操作前读取公共[任务策略](../super-editor-control/references/task-policy.md)。公共策略决定
+micro/current/book 范围、checkpoint 和保存；本技能的领域步骤不能把明确 micro 修改升级为整页流程。
+
 把文本当作“文档结构 + 文本框”操作，不要把它当作一段可随意覆盖的 HTML。局部改字、改格式和查找替换优先使用结构化工具；只有明确要整体重写时才使用 `editor_text_set_content`。
 
 ## 1. 统一目标与标准工作流
@@ -22,21 +25,29 @@ Bridge 1.6.0 起，内容级工具同时支持普通文本、表格单元格和�
 - `tableCell` 必须传 `tableId`，并用 `cellId` 或 0-based `row+col` 定位；两种方式同时给出时必须指向
   同一单元格。被合并覆盖的格不可操作。
 - `mindNode` 必须传 `mindId+nodeId`。节点 id 不唯一时 Bridge 拒绝操作，不能猜目标。
-- `editor_text_info/document/set_content/set_style/edit/set_link/remove_link/edit_embed/format` 支持上述统一
+- `editor_text_info`、`editor_text_document`、`editor_text_set_content`、`editor_text_set_style`、
+  `editor_text_edit`、`editor_text_set_link`、`editor_text_remove_link`、`editor_text_edit_embed` 和
+  `editor_text_format` 支持上述统一
   目标。返回值含外层 `elementId`、规范化 `target`、`targetKind`、`layoutOwner` 和
   `standaloneLayoutSupported`；后续写入应复用返回的规范化 `target`。
-- `editor_text_adaptive/fit/set_layout/inspect_layout/fit_to_box` 涉及文本框几何，只支持独立文本元素的
+- `editor_text_adaptive`、`editor_text_fit`、`editor_text_set_layout`、
+  `editor_text_inspect_layout` 和 `editor_text_fit_to_box` 涉及文本框几何，只支持独立文本元素的
   legacy `elementId`。不要把表格或思维导图外层 id 当普通文本框调用。
 
 标准工作流：
 
 1. 调用 `editor_text_document({ elementId })` 或 `editor_text_document({ target })`，读取 `plainText`、`paragraphs`、`runs`、`embeds`、`hyperlinks`、`defaultStyle`、`layout` 和 `contentHash`；需要定位差异时再看 `htmlHash`、`hyperlinkMetadataHash`。
-2. 写操作前调用 `editor_checkpoint({ label? })`，保存返回的 `checkpointId`。批量内容编辑先用支持它的工具传 `dryRun: true` 预览命中范围。
-3. 普通内容变化调用 `editor_text_edit`；超链接调用 `editor_text_set_link/remove_link`；公式、拼音和内嵌图片调用 `editor_text_edit_embed`；其他格式变化调用 `editor_text_format`；只有独立文本元素的文本框外观和约束调用 `editor_text_set_layout`。
+2. 按公共策略判断风险：单一 target 的局部编辑默认不打整页 checkpoint；批量重写、组内连锁布局或复杂
+   embed 变更才建立一次 checkpoint。批量内容编辑先用支持它的工具传 `dryRun: true` 预览命中范围。
+3. 普通内容变化调用 `editor_text_edit`；超链接调用 `editor_text_set_link` 或
+   `editor_text_remove_link`；公式、拼音和内嵌图片调用 `editor_text_edit_embed`；其他格式变化调用
+   `editor_text_format`；只有独立文本元素的文本框外观和约束调用 `editor_text_set_layout`。
 4. 内容与可见格式写入时传刚读取的 `expectedContentHash`，防止覆盖用户在此期间对正文或链接参数的修改。该 hash 联合覆盖 canonical HTML 与稳定排序后的 `hyperlinkParamList`，不能用 `htmlHash` 代替；`editor_text_format` 同时支持 `expectedContentHash + dryRun`。
 5. `editor_text_set_layout` 和 `editor_text_fit` 不改文本内容，不接受 `expectedContentHash/dryRun`；`editor_text_fit_to_box` 会改字号，接受 `expectedContentHash` 但不接受 `dryRun`。
 6. 独立文本元素调用 `editor_text_inspect_layout` 核对溢出、裁切、自适应和稳定状态；需要时再选择 `editor_text_fit` 或 `editor_text_fit_to_box`。嵌套目标以内容复读和外层表格/思维导图截图核对。
-7. 用相同 selector 调用 `editor_text_document` 复读结果，再滚动到外层元素截图核对。确认后显式调用 `editor_save`；失败调用 `editor_rollback({ checkpointId })`。
+7. 用相同 selector 调用 `editor_text_document` 复读结果。只有内容影响尺寸、外层表格/思维导图或视觉时
+   才滚动截图；当前页 dirty 时调用 `editor_save_verified(scope=current)`。只有本次确实建立过 checkpoint
+   且需要恢复时才调用 `editor_rollback({ checkpointId })`。
 
 ## 2. 索引与目标范围
 

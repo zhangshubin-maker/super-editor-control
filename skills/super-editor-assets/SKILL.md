@@ -1,61 +1,63 @@
 ---
 name: super-editor-assets
-description: 超媒编辑器（super-editor-control 插件）的用户与设计素材技能。用户要求获取当前登录用户信息、搜索或使用本书样章模板/区块模板、组件库、图片（素材）库，或要求 AI 自主设计并新增目录、从现有素材中选型和应用时使用。覆盖 editor_get_user_info、editor_search_templates、editor_get_template、editor_apply_template、editor_search_components、editor_apply_component、editor_search_images、editor_apply_image。
+description: 超媒编辑器用户与设计素材技能。用户要求获取当前登录用户、搜索/读取/应用本书样章或区块模板、组件库、图片素材库，替换单一图片，或为当前页/新目录进行素材选型时使用。按 micro 素材操作、当前页编排和新增目录三种 recipe 限制调用范围。
 ---
 
 # Super Editor Assets
 
-优先复用本书已有设计语言，再补充系统素材；不要在未检索素材库时直接从空白页重造常见版式。
+写前读取公共[任务策略](../super-editor-control/references/task-policy.md)。优先复用本书已有设计语言，
+再补系统素材；不要在未检查高相关模板时从空白重造常见教学版式。
 
-## 自主新增目录工作流
+## Micro：单一素材操作
 
-1. 连接编辑器后，并行读取 `editor_get_state`、`editor_get_user_info` 和样章模板：
-   `editor_search_templates({ kind: 'chapter', query })`。
-2. 根据用户目标、模板名称与封面筛选少量候选；只对候选调用
-   `editor_get_template({ templateId })`，检查区块结构和内容。
-3. 有合适样章时调用
-   `editor_apply_template({ kind: 'chapter', templateId, name, parentId })` 新增目录。
-   没有合适样章时才使用 `addSlide` 创建空白目录。
-4. 读取新目录结构，再按需要搜索：
-   - 区块：`editor_search_templates({ kind: 'block', query })`
-   - 组件：`editor_search_components({ query, scope: 'all', classifyType: 1 })`
-   - 图片：先 `editor_search_images({ query, scope: 'book' })`，无结果再查 `global`
-5. 应用素材：
-   - 区块模板：`editor_apply_template({ kind: 'block', templateId, index })`
-   - 组件：`editor_apply_component({ componentId, blockId, left?, top? })`
-   - 图片：`editor_apply_image({ imageId, blockId, left?, top?, width?, height? })`
-6. 用元素工具替换文案、调整布局；截图核对后 `editor_save`。
+只调用完成用户意图所需的素材类别，不读取样章或遍历其他库。
+
+- 获取用户：`editor_get_user_info({ refresh? })`。
+- 搜索/替换一张图：先 `editor_search_images({ query, scope: 'book' })`，无合适结果才查 global；
+  再 `editor_apply_image`。
+- 搜索/应用一个组件：`editor_search_components` → `editor_apply_component`。
+- 查询一个模板：`editor_search_templates` → 只对少量候选调用 `editor_get_template`。
+
+应用图片或组件后复读返回的 elementId；影响布局时加载 `super-editor-layout`。当前页 dirty 时按公共策略
+调用 `editor_save_verified(scope=current)`，不升级为整页素材规划。
+
+## Current：制作当前页或教学环节
+
+1. 从当前书的现有页和 1–3 个高相关候选中理解设计语言。
+2. 搜索 `kind=block` 区块模板；读取候选详情，检查真实区块、元素类型和可替换内容。
+3. 使用 `editor_apply_template({ kind: 'block', templateId, index? })` 插入，记录真实 blockId。
+4. 用 `super-editor-page-authoring` 理解槽位并填充内容。
+5. 只有区块仍缺独立视觉单元或必要媒体时才搜索组件/图片，不自动遍历全部素材库。
+
+`styleReference` 仅表示已核对的风格参考，不会应用模板或创建区块。
+
+## Chapter：明确新增目录
+
+1. 读取当前书和必要的父目录信息；搜索少量 `kind=chapter` 样章候选。
+2. 调用 `editor_get_template` 核对区块结构和页面设计，不凭封面判断。
+3. 用户明确要求新增目录或已授权完整做书时，调用
+   `editor_apply_template({ kind: 'chapter', templateId, name, parentId })`。
+4. 工具返回后读取新 slideId 和结构，再按 Current recipe 补充缺口。
+
+`kind=chapter` 会立即创建目录并写库，当前页 checkpoint 不能删除它；不能用它覆盖或补写现有目录。
+没有合适样章时才考虑空白目录，并遵守立即持久化边界。
 
 ## 选择规则
 
-- 优先级：本书样章/区块模板 > 本书图片 > 系统组件 > 总图片库 > 新建基础元素。
-- 模板承担整体结构，组件承担局部组合，图片承担视觉内容；不要把整张模板封面当成可编辑页面。
-- 搜索词同时尝试主题词、教学环节词和版式词，例如“导入 / 知识点 / 练习 / 总结 / 双栏 / 时间轴”。
-- 组件默认搜索 `classifyType: 1`（排版组件）；只有需要数据绑定时使用 `2`。
-- `editor_search_components` 默认不返回体积较大的 `content`；通常直接按 id 应用，只有分析原始结构时才传 `includeContent: true`。
-- 图片工具中的“图片库”对应编辑器素材库；结果 URL 可直接用于图片元素或背景图。
-- 对多个候选先比较元数据和封面，避免一次读取大量模板详情。
+- 优先级：本书成熟结构与样式 > 本书素材 > 合适系统组件/图片 > 新建基础元素。
+- 模板承担整体结构，组件承担局部组合，图片承担视觉内容。
+- 搜索词组合主题、教学环节和版式，例如“分数 导入 双栏”；不要一次读取大量模板 content。
+- 组件默认查排版类；只有任务确有数据绑定需求时再查数据类。
+- 先比较元数据和封面，再读取少量详情；应用后必须复读真实 slideId/blockId/elementIds。
 
-## 写入边界
+## MCP 工具
 
-- `kind: 'chapter'` 会调用目录接口并立即写库，整页 checkpoint 不能删除这个新目录；仅在用户要求新增目录或明确授权设计时执行。
-- 区块、组件、图片先写当前编辑状态；完成后统一 `editor_save`。
-- 大幅应用模板前先 `editor_checkpoint`。若结果不合适，用 `editor_rollback` 回退当前页内容。
-- 应用后必须重新读取页面或画布树，确认返回的 `slideId`、`blockId`、`elementIds` 实际存在。
-
-## 工具速查
-
-| MCP 工具 | 用途 |
+| 工具 | 用途 |
 |---|---|
-| `editor_get_user_info` | 获取当前登录用户信息 |
-| `editor_search_templates` | 搜索样章/区块模板 |
-| `editor_get_template` | 读取模板详情与可解析内容 |
-| `editor_apply_template` | 按样章新增目录或插入区块模板 |
-| `editor_search_components` | 搜索系统/个人组件库 |
-| `editor_apply_component` | 将组件放入指定区块 |
-| `editor_search_images` | 搜索本书/总图片素材库 |
-| `editor_apply_image` | 新增图片或替换已有图片 |
+| `editor_get_user_info` | 当前登录用户与素材权限 |
+| `editor_search_templates` / `editor_get_template` | 搜索并理解样章/区块模板 |
+| `editor_apply_template` | 新增样章目录或插入区块模板 |
+| `editor_search_components` / `editor_apply_component` | 搜索并应用组件 |
+| `editor_search_images` / `editor_apply_image` | 搜索并应用素材库图片 |
 
-通用桥接对应方法依次为 `getUserInfo`、`searchTemplates`、`getTemplateDetail`、
-`applyTemplate`、`searchComponents`、`applyComponent`、`searchImageLibrary`、
-`applyLibraryImage`。
+以上均直接调用 MCP 工具；Bridge 方法名只用于实现映射，不作为浏览器脚本示例。

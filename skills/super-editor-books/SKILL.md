@@ -5,6 +5,9 @@ description: 超媒编辑器（super-editor-control 插件）的书本管理技�
 
 # Super Editor Books
 
+书本创建、复制和跳转前读取公共[任务策略](../super-editor-control/references/task-policy.md)。创建属于
+立即持久化操作，跳转会改变编辑上下文；页面 checkpoint 不能回退。
+
 用现有书本作为可靠基线创建新书。默认只继承必传属性，不复制目录和内容。
 
 ## 搜索与选择源书

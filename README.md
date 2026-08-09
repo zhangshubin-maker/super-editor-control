@@ -65,6 +65,49 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
 设计新目录时，先搜索本书样章模板和区块模板，从成熟内容中参考版式、字体、色彩、间距和区块结构，
 再填充当前教学内容。不要因为一次文字或元素小修改而先构建整书 manifest。
 
+## MCP 写入边界与高频编辑入口
+
+每个 `tools/list` 工具描述都以前缀标明主要副作用：
+
+- `[只读]` 只读取数据或截图，不改课件内容和编辑器上下文。
+- `[工作副本写入|需 saveVerified|可 checkpoint]` 只改当前画布工作副本。大改前可
+  `editor_checkpoint`，完成后用 `editor_save_verified(scope=current)` 保存并回读。
+- `[立即写库|checkpoint不可恢复]` 会调用后端持久接口，当前页 checkpoint 不能撤销它。
+- 连接、导航、会话快照和视图状态虽不写库，但会改变当前任务上下文或内存状态，分别使用
+  `[连接状态|不写库]`、`[导航|改变编辑器上下文|不写库]`、`[会话内快照|不写库]`、
+  `[仅视图状态|不写库]`，不与纯数据读取混为一谈。
+- 模板、切页、上传并放图以及通用 RPC 等混合工具会在标签中直接写明分支语义。
+
+高频操作优先使用 typed 工具：`editor_move/resize/rotate_element`、`editor_move_elements`、
+`editor_set_element_spacing`、`editor_center_element_in_block`、`editor_scroll_to_block/element`、
+`editor_set_zoom`、`editor_fit_canvas`、`editor_add/delete/move_slide`、
+`editor_move/replace/copy_block_to_slide`。`editor_rpc_call` 只用于尚未封装且已经核对 Bridge 签名的
+低频方法。
+
+元素 `left/top` 永远是其 owner 区块内的 block-local 坐标，不能把整页 `pageY` 直接传给
+`editor_move_element`。跨区块布局先用
+`editor_get_elements_bounds({ coordinateSpace: 'page' })` 读取整页包围盒；
+`editor_align_elements` 将对齐参照 `target=selection/block/page` 与计算坐标
+`coordinateSpace=block/page` 分开表达，Bridge 通过区块 topMap 做 page/local 转换，并在任何元素会越出
+owner 区块时零写入拒绝。精确间距和区块坐标 bounds 只接受同一 owner 区块。
+
+`editor_apply_template(kind=chapter)` 新增目录并立即写库；`kind=block` 只写当前页工作副本，完成后
+必须使用 `editor_save_verified`，不再引导旧版 `editor_save`。跨页导入会先走带
+`saveBeforeSwitch/discardChanges` 的安全切页；跨页复制 dirty 源区块只允许
+`saveBeforeSwitch=true`，不会复制未保存内容后再丢弃源页。
+所有会离开 dirty 当前页的 typed 工具在 `saveBeforeSwitch=true` 时，都会先通过
+`saveVerified(scope=current, verify=true, expectedSlideId)` 保存并回读，再执行具体 Bridge 操作。
+
+`editor_batch` 只是顺序批量调用，不是事务；后一步失败不会自动回滚前面已成功的步骤。写入批次前按需
+单独 checkpoint。截图禁止放入 batch 或通用 RPC，必须单独调用 `editor_screenshot`，避免 PNG base64
+混入文本结果。`editor_save` 仅保留为 legacy 入口，新流程使用 `editor_save_verified`。
+
+数字模块复制只允许关联到尚无模块的目标元素。`editor_copy_digital_module` 不提供
+`replaceExisting`；目标已有模块时会安全拒绝。确需替换时必须显式
+`editor_delete_digital_module` 后再 copy，二者都是立即写库且不是原子事务。
+`editor_create_digital_module(replaceExisting=true)` 仍是受支持的创建/替换入口，由 Bridge 携带已有关系
+标识一次提交，不先删除旧模块。
+
 ## 题目能力
 
 - 用 `editor_list_question_paths` 和 `editor_get_question_search_options` 获取真实路径与筛选字典。
@@ -85,7 +128,7 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
   `editor_delete_question_explanation` 准备 type 94 所需讲解记录 ID。生成是异步任务，start
   会立即返回，不在一次 MCP 调用中长轮询。
 
-目录题目和讲解写操作立即持久化，不依赖 `editor_save`，也不能由画布快照回滚。题目排版写入画布后
+目录题目和讲解写操作立即持久化，不依赖 `editor_save_verified`，也不能由画布快照回滚。题目排版写入画布后
 仍需保存当前页，并可在写入前使用 `validateOnly=true`。当前版本不包含完整题目编辑或 OCR/AI 录题。
 
 ## 文本能力
@@ -138,7 +181,7 @@ legacy `elementId`。
   `TEXT_LAYOUT_TARGET_UNSUPPORTED`。`editor_text_fonts` 列出可用字体。
 
 推荐工作流是 `editor_text_document` → `editor_checkpoint({ label? })` → 局部编辑/格式化 →
-`editor_text_inspect_layout` → 截图核对 → `editor_save`。文本写操作仍属于当前页本地状态，保存前可由
+`editor_text_inspect_layout` → 截图核对 → `editor_save_verified(scope=current)`。文本写操作仍属于当前页本地状态，保存前可由
 `editor_rollback({ checkpointId })` 回滚。通用 `editor_update_element` 会拒绝文本 content、链接元数据和字数统计旁路更新；
 位置、尺寸和默认样式等通用字段不受影响。
 
@@ -218,7 +261,7 @@ cd scripts/mcp-server
 npm test
 ```
 
-测试覆盖插件 MCP 配置结构、题目/数字模块工具契约、CORS/LNA 响应头、长轮询、结果幂等、页面租约、客户端中断与 MCP 取消、queued/in-flight 故障语义、串行工具、两个 MCP 进程选主、owner 强制退出后的接管、截断响应和有界关闭。
+测试覆盖插件 MCP 配置结构、实际 `tools/list` 的 Codex 扁平 schema 兼容性、高频 typed 工具与运行时参数校验、题目/数字模块工具契约、CORS/LNA 响应头、长轮询、结果幂等、页面租约、客户端中断与 MCP 取消、queued/in-flight 故障语义、串行工具、两个 MCP 进程选主、owner 强制退出后的接管、截断响应和有界关闭。
 
 直接调试可运行 `node scripts/mcp-server/index.js`；需要 mock 时设置
 `SUPER_EDITOR_MOCK=1`。默认端口可用 `SUPER_EDITOR_RPC_PORT` 覆盖，但网页端必须通过

@@ -1,4 +1,4 @@
 interface:
   display_name: "Super Editor Questions"
-  short_description: "Search, validate, batch, and arrange question resources"
-  default_prompt: "Use $super-editor-questions to page through question scopes, plan up to 50 GUIDs, and validate then render batches of at most 30 into real courseware blocks."
+  short_description: "Search, plan, and render question resources"
+  default_prompt: "Use $super-editor-questions to search, verify, plan, and render the requested questions."

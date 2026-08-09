@@ -1,4 +1,4 @@
 interface:
   display_name: "Super Editor Text"
-  short_description: "Structure and safely edit Super Editor rich text"
-  default_prompt: "Use $super-editor-text to inspect and safely edit rich text in the current Super Editor page."
+  short_description: "Safely edit structured Super Editor rich text"
+  default_prompt: "Use $super-editor-text to inspect and safely edit the requested rich-text target."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Canvas"
+  short_description: "Navigate, checkpoint, screenshot, and save pages"
+  default_prompt: "Use $super-editor-canvas to navigate, verify, checkpoint, or save the requested page."

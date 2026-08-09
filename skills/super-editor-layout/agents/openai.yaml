@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Layout"
+  short_description: "Adjust and verify courseware layout safely"
+  default_prompt: "Use $super-editor-layout to adjust the affected layout and verify the rendered result."

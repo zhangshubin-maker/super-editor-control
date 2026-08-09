@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url'
 
 const SERVER_PATH = fileURLToPath(new URL('../index.js', import.meta.url))
 
-function createMockClient() {
+function createMockClient(extraEnv = {}) {
   const child = spawn(process.execPath, [SERVER_PATH], {
-    env: { ...process.env, SUPER_EDITOR_MOCK: '1' },
+    env: { ...process.env, SUPER_EDITOR_MOCK: '1', ...extraEnv },
     stdio: ['pipe', 'pipe', 'pipe']
   })
   child.stdout.setEncoding('utf8')
@@ -602,8 +602,7 @@ test('整书创作工具默认保持当前目录轻调用，整书和深读必�
     const selectSlideTool = tools.find((tool) => tool.name === 'editor_select_slide')
     assert.equal(selectSlideTool.inputSchema.properties.saveBeforeSwitch.type, 'boolean')
     assert.equal(selectSlideTool.inputSchema.properties.discardChanges.type, 'boolean')
-    assert.equal(selectSlideTool.inputSchema.allOf[0].not.properties.saveBeforeSwitch.const, true)
-    assert.equal(selectSlideTool.inputSchema.allOf[0].not.properties.discardChanges.const, true)
+    assert.equal(selectSlideTool.inputSchema.allOf, undefined)
     const planTool = tools.find((tool) => tool.name === 'editor_plan_question_lesson')
     const renderTool = tools.find((tool) => tool.name === 'editor_render_questions_to_block')
     assert.equal(planTool.inputSchema.properties.guids.maxItems, 50)
@@ -791,7 +790,8 @@ test('整书创作工具默认保持当前目录轻调用，整书和深读必�
       })
     )
     assert.equal(selectedSafely.slideId, 'slide-2')
-    assert.equal(selectedSafely.dirtyAction, 'saved')
+    assert.equal(selectedSafely.dirtyBefore, false)
+    assert.equal(selectedSafely.dirtyAction, 'none')
 
     const conflictingSwitch = readToolError(
       await client.request('tools/call', {
@@ -871,5 +871,387 @@ test('整书创作工具默认保持当前目录轻调用，整书和深读必�
     assert.match(accidentalBookScan.error, /slideIds\/cursor 仅用于 scope=book/)
   } finally {
     await client.close()
+  }
+})
+
+test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 typed 编辑入口', async () => {
+  const client = createMockClient()
+  try {
+    const listed = await client.request('tools/list')
+    assert.equal(listed.error, undefined)
+    const tools = listed.result.tools
+    const byName = new Map(tools.map((tool) => [tool.name, tool]))
+    const forbiddenSchemaKeywords = ['oneOf', 'anyOf', 'allOf', 'not', 'if', 'then']
+    const inspectSchema = (schema, path) => {
+      if (Array.isArray(schema)) {
+        schema.forEach((item, index) => inspectSchema(item, `${path}[${index}]`))
+        return
+      }
+      if (!schema || typeof schema !== 'object') return
+
+      forbiddenSchemaKeywords.forEach((keyword) => {
+        assert.equal(
+          schema[keyword],
+          undefined,
+          `${path} 不能含 ${keyword}，否则 Codex 可能降级声明`
+        )
+      })
+      if (schema.type === 'array') {
+        assert.ok(
+          Object.prototype.hasOwnProperty.call(schema, 'items') && schema.items,
+          `${path} 的 array schema 必须声明真实 items`
+        )
+      }
+      Object.entries(schema).forEach(([key, value]) => inspectSchema(value, `${path}.${key}`))
+    }
+
+    tools.forEach((tool) => {
+      assert.equal(tool.inputSchema.type, 'object', `${tool.name} 顶层 schema 必须是 object`)
+      assert.ok(tool.inputSchema.properties, `${tool.name} 必须声明 properties`)
+      inspectSchema(tool.inputSchema, tool.name)
+      assert.match(tool.description, /^\[[^\]]+\] /, `${tool.name} 缺少持久化边界标签`)
+    })
+    assert.match(byName.get('editor_get_state').description, /^\[只读\]/)
+    assert.match(
+      byName.get('editor_move_element').description,
+      /^\[工作副本写入\|需 saveVerified\|可 checkpoint\]/
+    )
+    assert.match(
+      byName.get('editor_create_book').description,
+      /^\[立即写库\|checkpoint不可恢复\]/
+    )
+    assert.match(byName.get('editor_apply_template').description, /^\[按 kind：/)
+    assert.match(byName.get('editor_batch').description, /^\[高级混合调用\|非事务/)
+    assert.match(byName.get('editor_batch').description, /不是事务.*禁止.*screenshot/s)
+    assert.match(byName.get('editor_save').description, /旧版保存入口.*editor_save_verified/)
+    const copyDigitalModule = byName.get('editor_copy_digital_module')
+    assert.equal(copyDigitalModule.inputSchema.properties.replaceExisting, undefined)
+    assert.match(copyDigitalModule.description, /始终安全拒绝.*不是原子事务/)
+    assert.match(byName.get('editor_connect').description, /^\[连接状态\|不写库\]/)
+    assert.match(
+      byName.get('editor_jump_to_book').description,
+      /^\[导航\|改变编辑器上下文\|不写库\]/
+    )
+    assert.match(byName.get('editor_checkpoint').description, /^\[会话内快照\|不写库\]/)
+    assert.match(byName.get('editor_clear_checkpoints').description, /^\[会话内快照\|不写库\]/)
+    assert.match(byName.get('editor_set_zoom').description, /^\[仅视图状态\|不写库\]/)
+    assert.match(byName.get('editor_undo').description, /已禁用/)
+    assert.match(byName.get('editor_redo').description, /已禁用/)
+
+    const typedNames = [
+      'editor_add_slide',
+      'editor_delete_slide',
+      'editor_move_slide',
+      'editor_move_block',
+      'editor_replace_block',
+      'editor_copy_block_to_slide',
+      'editor_move_element',
+      'editor_move_elements',
+      'editor_resize_element',
+      'editor_rotate_element',
+      'editor_set_element_spacing',
+      'editor_center_element_in_block',
+      'editor_duplicate_elements',
+      'editor_get_elements_bounds',
+      'editor_get_canvas_info',
+      'editor_scroll_to_block',
+      'editor_scroll_to_element',
+      'editor_set_zoom',
+      'editor_fit_canvas'
+    ]
+    typedNames.forEach((name) => assert.ok(byName.has(name), `缺少 typed 工具 ${name}`))
+    assert.deepEqual(
+      byName.get('editor_align_elements').inputSchema.properties.target.enum,
+      ['selection', 'block', 'page']
+    )
+    assert.deepEqual(
+      byName.get('editor_align_elements').inputSchema.properties.coordinateSpace.enum,
+      ['block', 'page']
+    )
+    assert.deepEqual(
+      byName.get('editor_get_elements_bounds').inputSchema.properties.coordinateSpace.enum,
+      ['block', 'page']
+    )
+    const duplicateElementIds = byName.get('editor_duplicate_elements').inputSchema.properties.elementIds
+    assert.equal(duplicateElementIds.minItems, 1)
+    assert.equal(duplicateElementIds.uniqueItems, true)
+    assert.equal(duplicateElementIds.items.minLength, 1)
+
+    const textDocument = byName.get('editor_text_document').inputSchema
+    assert.ok(textDocument.properties.elementId)
+    assert.ok(textDocument.properties.target)
+    assert.equal(textDocument.oneOf, undefined)
+
+    const renderQuestions = byName.get('editor_render_questions_to_block').inputSchema
+    assert.ok(renderQuestions.properties.plan)
+    assert.ok(renderQuestions.properties.guids)
+    assert.equal(renderQuestions.anyOf, undefined)
+
+    const batchArgs = byName.get('editor_batch').inputSchema.properties.steps.items.properties.args
+    assert.deepEqual(batchArgs.items.type, [
+      'object',
+      'array',
+      'string',
+      'number',
+      'boolean',
+      'null'
+    ])
+    const rpcArgs = byName.get('editor_rpc_call').inputSchema.properties.args
+    assert.deepEqual(rpcArgs.items.type, batchArgs.items.type)
+    const importBlocks = byName.get('editor_import_blocks').inputSchema.properties.blocks
+    assert.equal(importBlocks.items.type, 'object')
+    assert.equal(importBlocks.items.additionalProperties, true)
+
+    const setLink = byName.get('editor_text_set_link').inputSchema
+    assert.deepEqual(
+      setLink.properties.hyperlink.properties.agent_params.items.type,
+      ['object', 'array', 'string', 'number', 'boolean', 'null']
+    )
+
+    const successfulCalls = [
+      ['editor_move_element', { elementId: 'el-1', x: 10, y: 20 }],
+      ['editor_move_elements', { elementIds: ['el-1', 'el-2'], x: 10, y: 20 }],
+      ['editor_resize_element', { elementId: 'el-1', width: 120, height: 60 }],
+      ['editor_rotate_element', { elementId: 'el-1', angle: 15 }],
+      [
+        'editor_set_element_spacing',
+        { elementIds: ['el-1', 'el-2'], direction: 'horizontal', spacing: 24 }
+      ],
+      ['editor_center_element_in_block', { elementId: 'el-1', axis: 'both' }],
+      [
+        'editor_align_elements',
+        {
+          elementIds: ['el-1', 'el-2'],
+          align: 'vertical',
+          target: 'selection',
+          coordinateSpace: 'page'
+        }
+      ],
+      [
+        'editor_get_elements_bounds',
+        { elementIds: ['el-1', 'el-2'], coordinateSpace: 'page' }
+      ],
+      ['editor_get_canvas_info', {}],
+      ['editor_scroll_to_block', { blockId: 'block-1' }],
+      ['editor_scroll_to_element', { elementId: 'el-1' }],
+      ['editor_set_zoom', { scale: 1.25 }],
+      ['editor_fit_canvas', {}],
+      [
+        'editor_apply_template',
+        { kind: 'chapter', templateId: 100, discardChanges: true }
+      ],
+      ['editor_add_slide', { name: '新目录', templateId: 100, saveBeforeSwitch: true }],
+      ['editor_delete_slide', { slideId: 'slide-2' }],
+      ['editor_move_slide', { slideId: 'slide-2', toIndex: 0 }],
+      ['editor_move_block', { blockId: 'block-1', toIndex: 0 }],
+      ['editor_replace_block', { blockId: 'block-1', templateData: { template_type: 2 } }],
+      [
+        'editor_copy_block_to_slide',
+        { blockId: 'block-1', targetSlideId: 'slide-2', index: 0 }
+      ],
+      [
+        'editor_import_blocks',
+        { slideId: 'slide-2', blocks: [{ template_type: 2 }], discardChanges: true }
+      ]
+    ]
+    const successfulResults = new Map()
+    for (const [name, argumentsValue] of successfulCalls) {
+      successfulResults.set(
+        name,
+        readToolData(
+          await client.request('tools/call', { name, arguments: argumentsValue })
+        )
+      )
+    }
+    assert.deepEqual(successfulResults.get('editor_move_element'), {
+      elementCount: 1,
+      x: 10,
+      y: 20,
+      dx: 0,
+      dy: 0,
+      coordinateSpace: 'block'
+    })
+    assert.equal(successfulResults.get('editor_move_elements').coordinateSpace, 'block')
+    assert.equal(successfulResults.get('editor_set_element_spacing').coordinateSpace, 'block')
+    assert.equal(successfulResults.get('editor_center_element_in_block').blockId, 'block-1')
+    assert.deepEqual(successfulResults.get('editor_align_elements'), {
+      align: 'vertical',
+      target: 'selection',
+      elementCount: 2,
+      coordinateSpace: 'page'
+    })
+    assert.equal(successfulResults.get('editor_get_elements_bounds').coordinateSpace, 'page')
+    assert.equal(successfulResults.get('editor_get_canvas_info').canvasWidth, 794)
+    assert.match(successfulResults.get('editor_apply_template').slideId, /^mock-slide-/)
+    assert.equal(
+      successfulResults.get('editor_import_blocks').args[2].discardChanges,
+      true
+    )
+
+    const screenshotBatch = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_batch',
+        arguments: { steps: [{ method: 'screenshot', args: [] }] }
+      })
+    )
+    assert.match(screenshotBatch.error, /禁止截图步骤.*editor_screenshot/)
+
+    const malformedBatchArgs = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_batch',
+        arguments: { steps: [{ method: 'getState', args: { detail: true } }] }
+      })
+    )
+    assert.match(malformedBatchArgs.error, /args 必须是 JSON 参数数组/)
+
+    const malformedRpcArgs = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_rpc_call',
+        arguments: { method: 'getState', args: { detail: true } }
+      })
+    )
+    assert.match(malformedRpcArgs.error, /args 必须是 JSON 参数数组/)
+
+    const invalidImageSource = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_apply_image',
+        arguments: {
+          imageId: 1,
+          url: 'https://mock.example.com/image.png',
+          blockId: 'block-1'
+        }
+      })
+    )
+    assert.match(invalidImageSource.error, /必须且只能提供 imageId \/ url 之一/)
+
+    const invalidPatch = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_update_element',
+        arguments: { elementId: 'el-1', patch: {} }
+      })
+    )
+    assert.match(invalidPatch.error, /patch 不能为空对象/)
+
+    const irrelevantBlockSwitchFlags = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_apply_template',
+        arguments: {
+          kind: 'block',
+          templateId: 100,
+          saveBeforeSwitch: true
+        }
+      })
+    )
+    assert.match(irrelevantBlockSwitchFlags.error, /仅适用于 chapter/)
+
+    const unsupportedCopyReplacement = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_copy_digital_module',
+        arguments: {
+          sourceElementId: 'source-el',
+          targetElementId: 'target-el',
+          replaceExisting: true
+        }
+      })
+    )
+    assert.match(unsupportedCopyReplacement.error, /不支持 replaceExisting/)
+  } finally {
+    await client.close()
+  }
+})
+
+test('typed 切页工具在 dirty 页先 saveVerified 回读，再执行 Bridge 切页', async () => {
+  const scenarios = [
+    {
+      tool: 'editor_select_slide',
+      bridgeMethod: 'selectSlide',
+      arguments: { slideId: 'slide-2', saveBeforeSwitch: true }
+    },
+    {
+      tool: 'editor_add_slide',
+      bridgeMethod: 'addSlide',
+      arguments: { name: '新目录', templateId: 100, saveBeforeSwitch: true }
+    },
+    {
+      tool: 'editor_delete_slide',
+      bridgeMethod: 'deleteSlide',
+      arguments: { slideId: 'slide-1', saveBeforeSwitch: true }
+    },
+    {
+      tool: 'editor_import_blocks',
+      bridgeMethod: 'importBlocks',
+      arguments: {
+        slideId: 'slide-2',
+        blocks: [{ template_type: 2 }],
+        saveBeforeSwitch: true
+      }
+    },
+    {
+      tool: 'editor_apply_template',
+      bridgeMethod: 'applyTemplate',
+      arguments: { kind: 'chapter', templateId: 100, saveBeforeSwitch: true }
+    },
+    {
+      tool: 'editor_render_questions_to_block',
+      bridgeMethod: 'renderQuestionsToBlock',
+      arguments: {
+        guids: ['question-a'],
+        slideId: 'slide-2',
+        blockId: 'block-1',
+        validateOnly: true,
+        saveBeforeSwitch: true
+      }
+    }
+  ]
+
+  for (const scenario of scenarios) {
+    const client = createMockClient({ SUPER_EDITOR_MOCK_DIRTY: '1' })
+    try {
+      readToolData(
+        await client.request('tools/call', {
+          name: scenario.tool,
+          arguments: scenario.arguments
+        })
+      )
+      const calls = readToolData(
+        await client.request('tools/call', {
+          name: 'editor_rpc_call',
+          arguments: { method: 'getMockCallLog', args: [] }
+        })
+      )
+      const stateIndex = calls.findIndex((call) => call.method === 'getState')
+      const saveIndexes = calls
+        .map((call, index) => (call.method === 'saveVerified' ? index : -1))
+        .filter((index) => index >= 0)
+      const businessIndex = calls.findIndex((call) => call.method === scenario.bridgeMethod)
+      assert.ok(stateIndex >= 0, `${scenario.tool} 未读取 dirty 状态`)
+      assert.deepEqual(saveIndexes.length, 1, `${scenario.tool} 应且只应 saveVerified 一次`)
+      assert.ok(stateIndex < saveIndexes[0], `${scenario.tool} 必须先读状态再保存`)
+      assert.ok(saveIndexes[0] < businessIndex, `${scenario.tool} 必须保存回读后再切页`)
+      assert.deepEqual(calls[saveIndexes[0]].args, [
+        { scope: 'current', verify: true, expectedSlideId: 'slide-1' }
+      ])
+    } finally {
+      await client.close()
+    }
+  }
+
+  const nonCurrentDeleteClient = createMockClient({ SUPER_EDITOR_MOCK_DIRTY: '1' })
+  try {
+    readToolData(
+      await nonCurrentDeleteClient.request('tools/call', {
+        name: 'editor_delete_slide',
+        arguments: { slideId: 'slide-2', saveBeforeSwitch: true }
+      })
+    )
+    const calls = readToolData(
+      await nonCurrentDeleteClient.request('tools/call', {
+        name: 'editor_rpc_call',
+        arguments: { method: 'getMockCallLog', args: [] }
+      })
+    )
+    assert.equal(calls.some((call) => call.method === 'saveVerified'), false)
+  } finally {
+    await nonCurrentDeleteClient.close()
   }
 })

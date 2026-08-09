@@ -69,23 +69,8 @@ const TEXT_TARGET_SCHEMA = {
     nodeId: { ...ID_SCHEMA, description: 'kind=mindNode 时的节点 data.id' }
   },
   required: ['kind'],
-  allOf: [
-    {
-      if: { properties: { kind: { const: 'element' } } },
-      then: { required: ['elementId'] }
-    },
-    {
-      if: { properties: { kind: { const: 'tableCell' } } },
-      then: {
-        required: ['tableId'],
-        anyOf: [{ required: ['cellId'] }, { required: ['row', 'col'] }]
-      }
-    },
-    {
-      if: { properties: { kind: { const: 'mindNode' } } },
-      then: { required: ['mindId', 'nodeId'] }
-    }
-  ],
+  description:
+    '按 kind 提供字段：element 需要 elementId；tableCell 需要 tableId + cellId 或 row+col；mindNode 需要 mindId+nodeId。运行时会严格校验。',
   additionalProperties: false
 }
 const TEXT_TARGET_PROPERTIES = {
@@ -99,9 +84,9 @@ const TEXT_TARGET_PROPERTIES = {
     description: '统一富文本目标；与 legacy elementId 二选一'
   }
 }
-const TEXT_TARGET_SELECTOR_SCHEMA = {
-  oneOf: [{ required: ['elementId'] }, { required: ['target'] }]
-}
+// 不在 Codex-facing schema 顶层使用 oneOf/allOf。Codex 的工具声明转换器会因此把
+// 整个参数退化为 Record<string, unknown>；exact-one 关系由 validateTextTargetSelector 校验。
+const TEXT_TARGET_SELECTOR_SCHEMA = {}
 const TEXT_FORMAT_PROPERTIES = {
   fontName: { type: 'string' },
   fontChinese: { type: 'string' },
@@ -311,7 +296,7 @@ const TOOLS = [
   },
   {
     name: 'editor_apply_template',
-    description: '应用模板：kind=chapter 时按样章模板新增并选中目录（立即写库）；kind=block 时把区块模板插入当前页（随后应 editor_save）。',
+    description: '应用模板：kind=chapter 时按样章模板新增并选中目录（立即写库）；kind=block 时把区块模板插入当前页工作副本，完成后用 editor_save_verified(scope=current) 保存并回读。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -319,8 +304,16 @@ const TOOLS = [
         templateId: { type: ['string', 'number'], description: '模板 id' },
         name: { type: 'string', description: '新目录或新区块名称' },
         parentId: { type: ['string', 'number'], description: '新增目录的父目录 id；0/省略为根目录' },
-        index: { type: 'number', description: '区块插入下标；省略时追加' },
-        afterBlockId: { type: 'string', description: '插到该区块之后；优先于 index' }
+        index: { type: 'integer', minimum: 0, description: '区块插入下标；省略时追加' },
+        afterBlockId: { type: 'string', description: '插到该区块之后；优先于 index' },
+        saveBeforeSwitch: {
+          type: 'boolean',
+          description: 'kind=chapter 且当前页 dirty 时，先保存并回读再新增和切换'
+        },
+        discardChanges: {
+          type: 'boolean',
+          description: 'kind=chapter 且当前页 dirty 时，明确丢弃当前页改动再新增和切换'
+        }
       },
       required: ['kind', 'templateId'],
       additionalProperties: false
@@ -458,7 +451,7 @@ const TOOLS = [
   },
   {
     name: 'editor_create_digital_module',
-    description: '为元素新增数字模块并立即写入后端，不需要随后 editor_save。只传 elementId，桥接会解析所属区块的数据库 id；已有模块时默认拒绝，replaceExisting=true 才显式替换。mediaPath 可便捷上传本地音视频/文件，上传结果会写入 config.uploadedFile 后交给类型适配器。',
+    description: '为元素新增数字模块并立即写入后端，不需要随后 editor_save_verified。只传 elementId，桥接会解析所属区块的数据库 id；已有模块时默认拒绝，replaceExisting=true 才显式一次提交替换（不会先删除旧模块）。mediaPath 可便捷上传本地音视频/文件，上传结果会写入 config.uploadedFile 后交给类型适配器。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -511,14 +504,13 @@ const TOOLS = [
   },
   {
     name: 'editor_copy_digital_module',
-    description: '把已有数字模块复制关联到另一个元素并立即写入后端。传 sourceElementId 自动读取 model_id，或直接传 modelId；复制与编辑器“复制/粘贴数字模块”一致，共享同一个 model_id，不是独立深克隆。目标已有模块时默认拒绝。',
+    description: '把已有数字模块复制关联到一个尚未绑定模块的元素并立即写入后端。传 sourceElementId 自动读取 model_id，或直接传 modelId；复制与编辑器“复制/粘贴数字模块”一致，共享同一个 model_id，不是独立深克隆。目标已有模块时始终安全拒绝；如确需替换，必须先单独 delete 再 copy，这两个立即写库动作不是原子事务。',
     inputSchema: {
       type: 'object',
       properties: {
         sourceElementId: { type: 'string', description: '源元素 id（与 modelId 二选一）' },
         modelId: { type: ['string', 'number'], description: '已有数字模块 model_id（与 sourceElementId 二选一）' },
-        targetElementId: { type: 'string', description: '目标元素 id' },
-        replaceExisting: { type: 'boolean', description: '目标已有模块时是否先删除再关联，默认 false' }
+        targetElementId: { type: 'string', description: '尚未绑定数字模块的目标元素 id' }
       },
       required: ['targetElementId'],
       additionalProperties: false
@@ -826,7 +818,7 @@ const TOOLS = [
         slideId: { type: 'string' },
         saveBeforeSwitch: {
           type: 'boolean',
-          description: '当前页有未保存改动时，先保存再切换'
+          description: '当前页有未保存改动时，先保存并回读再切换'
         },
         discardChanges: {
           type: 'boolean',
@@ -834,17 +826,63 @@ const TOOLS = [
         }
       },
       required: ['slideId'],
-      allOf: [
-        {
-          not: {
-            properties: {
-              saveBeforeSwitch: { const: true },
-              discardChanges: { const: true }
-            },
-            required: ['saveBeforeSwitch', 'discardChanges']
-          }
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_add_slide',
+    description:
+      '新增并选中目录。templateId 省略时由 Bridge 复用或创建空白样章；当前页 dirty 时必须显式 saveBeforeSwitch 或 discardChanges。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', minLength: 1, description: '目录名称，默认“未命名”' },
+        parentId: { type: ['string', 'number'], description: '父目录 id；省略为根目录' },
+        templateId: { type: ['string', 'number'], description: '可选样章模板 id' },
+        templateType: { type: 'number', description: '模板类型；样章通常为 3' },
+        saveBeforeSwitch: {
+          type: 'boolean',
+          description: '当前页 dirty 时，先保存并回读再新增和切换'
+        },
+        discardChanges: {
+          type: 'boolean',
+          description: '当前页 dirty 时，明确丢弃当前页改动再新增和切换'
         }
-      ],
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_delete_slide',
+    description:
+      '删除目录并立即写库。删除当前 dirty 目录时必须显式 saveBeforeSwitch 或 discardChanges；删除前应先读取或导出备份。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slideId: { type: 'string', minLength: 1 },
+        saveBeforeSwitch: {
+          type: 'boolean',
+          description: '删除当前 dirty 目录前先保存并回读'
+        },
+        discardChanges: {
+          type: 'boolean',
+          description: '明确丢弃当前 dirty 目录的未保存改动并继续删除'
+        }
+      },
+      required: ['slideId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_move_slide',
+    description: '把目录移动到同级的 0-based 目标下标并立即写库。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slideId: { type: 'string', minLength: 1 },
+        toIndex: { type: 'integer', minimum: 0 }
+      },
+      required: ['slideId', 'toIndex'],
       additionalProperties: false
     }
   },
@@ -873,14 +911,69 @@ const TOOLS = [
       required: ['blockId'],
       additionalProperties: false
     }
-  },  {
+  },
+  {
+    name: 'editor_move_block',
+    description: '把当前页区块移动到 0-based 目标下标。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockId: { type: 'string', minLength: 1 },
+        toIndex: { type: 'integer', minimum: 0 }
+      },
+      required: ['blockId', 'toIndex'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_replace_block',
+    description: '用完整区块模板对象替换当前页目标区块，保持原位置和原 blockId。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockId: { type: 'string', minLength: 1 },
+        templateData: {
+          type: 'object',
+          minProperties: 1,
+          additionalProperties: true,
+          description: '完整区块模板对象；通常来自 editor_export_slide 或模板详情'
+        }
+      },
+      required: ['blockId', 'templateData'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_copy_block_to_slide',
+    description:
+      '把当前页区块复制到目标目录。跨页且当前页 dirty 时应使用 saveBeforeSwitch；discardChanges 不会用于复制 dirty 源，避免复制语义不明确。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockId: { type: 'string', minLength: 1 },
+        targetSlideId: { type: 'string', minLength: 1 },
+        index: { type: 'integer', minimum: 0, description: '目标页插入下标；省略时追加' },
+        saveBeforeSwitch: {
+          type: 'boolean',
+          description: '当前页 dirty 时，先保存并回读再复制和切换'
+        },
+        discardChanges: {
+          type: 'boolean',
+          description: 'dirty 源会被拒绝并要求保存，防止复制未保存内容后再丢弃'
+        }
+      },
+      required: ['blockId', 'targetSlideId'],
+      additionalProperties: false
+    }
+  },
+  {
     name: 'editor_update_block',
     description: '更新区块属性（如 name、size.height）。',
     inputSchema: {
       type: 'object',
       properties: {
         blockId: { type: 'string' },
-        patch: { type: 'object', description: '要合并的区块属性' }
+        patch: { type: 'object', minProperties: 1, description: '要合并的区块属性' }
       },
       required: ['blockId', 'patch'],
       additionalProperties: false
@@ -898,7 +991,7 @@ const TOOLS = [
   },
   {
     name: 'editor_add_element',
-    description: '在指定区块内新增元素。type 参考元素类型体系：text/image/shape/line/chart/table/video/audio/mind/pdfpage/latex/bracket/connectLine/input/outline/tab/textarea 等。payload 为元素数据。',
+    description: '在指定 owner 区块内新增元素。payload.left/top/x/y 均为 block-local 坐标；省略位置时按目标区块自身尺寸居中，不使用整页高度。Bridge 会重建元素树 ID，并在首个写入前校验真实包围盒，越界时零写入拒绝。type 参考 text/image/shape/line/chart/table/video/audio/mind/pdfpage/latex/bracket/connectLine/input/outline/tab/textarea 等。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -912,14 +1005,110 @@ const TOOLS = [
   },
   {
     name: 'editor_update_element',
-    description: '修改元素通用属性（patch 合并）。文本元素的 geometry、默认样式等仍可修改，但 content/hyperlinkParamList/字数统计字段会拒绝并要求使用 editor_text_* 专用工具。',
+    description: '修改元素通用属性（patch 合并）。几何字段 left/top/x/y/width/height/rotate 始终按 owner block-local 语义生成候选包围盒并预检，越界零写入；明确的移动、缩放、旋转优先使用对应 typed 工具。文本 content/hyperlinkParamList/字数统计字段会拒绝并要求使用 editor_text_* 专用工具。',
     inputSchema: {
       type: 'object',
       properties: {
         elementId: { type: 'string' },
-        patch: { type: 'object' }
+        patch: { type: 'object', minProperties: 1 }
       },
       required: ['elementId', 'patch'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_move_element',
+    description: '把单个元素整体移动，使其几何包围盒左上角到达 owner 区块内的 block-local (x, y)。它不是整页 pageY 或视口坐标；Bridge 会先校验完整包围盒，越出 owner 区块时零写入拒绝。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', minLength: 1 },
+        x: { type: 'number', description: '区块内横坐标' },
+        y: { type: 'number', description: '区块内纵坐标' }
+      },
+      required: ['elementId', 'x', 'y'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_move_elements',
+    description: '把同一 owner 区块内的元素选择集整体移动，使选择集包围盒左上角到达 block-local (x, y)，并保持元素相对位置；越出 owner 区块时零写入拒绝。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementIds: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1 }
+        },
+        x: { type: 'number', description: '选择集包围盒的 block-local 左坐标' },
+        y: { type: 'number', description: '选择集包围盒的 block-local 上坐标' }
+      },
+      required: ['elementIds', 'x', 'y'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_resize_element',
+    description: '把非组元素精确调整为指定正宽高，并按缩放后（含现有旋转）的真实包围盒检查 owner 区块；越界时零写入拒绝。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', minLength: 1 },
+        width: { type: 'number', exclusiveMinimum: 0 },
+        height: { type: 'number', exclusiveMinimum: 0 }
+      },
+      required: ['elementId', 'width', 'height'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_rotate_element',
+    description: '设置非组元素旋转角度（度），并按旋转后的真实包围盒检查 owner 区块；越界时零写入拒绝。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', minLength: 1 },
+        angle: { type: 'number' }
+      },
+      required: ['elementId', 'angle'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_set_element_spacing',
+    description: '将同一 owner 区块内至少两个元素按水平或垂直方向排列，并设置 block-local 相邻间距；跨区块会拒绝。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementIds: {
+          type: 'array',
+          minItems: 2,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1 }
+        },
+        direction: { type: 'string', enum: ['horizontal', 'vertical'] },
+        spacing: { type: 'number' }
+      },
+      required: ['elementIds', 'direction', 'spacing'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_center_element_in_block',
+    description: '将单个元素在所属区块内水平、垂直或双向居中。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', minLength: 1 },
+        axis: {
+          type: 'string',
+          enum: ['horizontal', 'vertical', 'both'],
+          default: 'both'
+        }
+      },
+      required: ['elementId'],
       additionalProperties: false
     }
   },
@@ -1009,12 +1198,12 @@ const TOOLS = [
   },
   {
     name: 'editor_save',
-    description: '保存当前课件（走编辑器既有保存流程）。',
+    description: '旧版保存入口，只执行编辑器既有保存流程；新调用优先使用 editor_save_verified(scope=current) 保存并回读校验。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
     name: 'editor_screenshot',
-    description: '截图画布并返回 PNG 图片（模型可直接看到效果，用于排版/视觉核对）。默认截当前视口；fullPage=true 截全部区块拼接为整页；blockId 指定单个区块（uuid）。注意：canvas 类区块（四线三格、手写格）和跨域图片可能渲染为空，请结合 editor_canvas_tree 数值核对。',
+    description: '截图画布并返回 PNG 图片（模型可直接看到效果，用于排版/视觉核对）。默认截当前视口；fullPage=true 截全部区块拼接为整页；blockId 指定单个区块（uuid）。注意：canvas 类区块（四线三格、手写格）和跨域图片可能渲染为空，请结合 editor_get_canvas_tree 数值核对。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1027,6 +1216,46 @@ const TOOLS = [
   {
     name: 'editor_get_canvas_tree',
     description: '获取当前页完整结构树：区块列表+元素树+统计（blockCount/elementCount/typeCounts），AI 理解画布首选。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'editor_get_canvas_info',
+    description: '读取当前目录的页面尺寸、缩放、视口偏移和元素统计，用于布局计算与视图诊断。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'editor_scroll_to_block',
+    description: '把编辑器视口滚动到指定区块。',
+    inputSchema: {
+      type: 'object',
+      properties: { blockId: { type: 'string', minLength: 1 } },
+      required: ['blockId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_scroll_to_element',
+    description: '把编辑器视口滚动到指定元素。',
+    inputSchema: {
+      type: 'object',
+      properties: { elementId: { type: 'string', minLength: 1 } },
+      required: ['elementId'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_set_zoom',
+    description: '设置编辑器画布缩放比例，范围 0.1 到 3。',
+    inputSchema: {
+      type: 'object',
+      properties: { scale: { type: 'number', minimum: 0.1, maximum: 3 } },
+      required: ['scale'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_fit_canvas',
+    description: '自动缩放并居中画布，使当前画布适配可见视口。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -1059,25 +1288,66 @@ const TOOLS = [
   },
   {
     name: 'editor_align_elements',
-    description: '对齐/等间距排列元素。align: top/bottom/left/right/horizontal/vertical/center/hdengju(水平等间距)/vdengju(垂直等间距)；target: selection(选择集内)/canvas(对齐画布)。',
+    description: '对齐或等间距排列元素。target 表示对齐参照（selection/block/page），coordinateSpace 表示计算坐标（block/page）：同块 selection 默认 block；跨块 selection 必须显式 page；target=block/page 会强制对应坐标。hdengju/vdengju 仅支持 selection，但坐标可为 block/page。Bridge 用区块 topMap 转换 page 坐标，最终始终写回各 owner 的 block-local left/top，并在任一元素越出 owner 前零写入拒绝。',
     inputSchema: {
       type: 'object',
       properties: {
-        elementIds: { type: 'array', items: { type: 'string' } },
+        elementIds: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1 }
+        },
         align: { type: 'string', enum: ['top', 'bottom', 'left', 'right', 'horizontal', 'vertical', 'center', 'hdengju', 'vdengju'] },
-        target: { type: 'string', enum: ['selection', 'canvas'], description: '默认 selection；单个元素自动对齐画布' }
+        target: {
+          type: 'string',
+          enum: ['selection', 'block', 'page'],
+          description: '对齐参照，默认 selection'
+        },
+        coordinateSpace: {
+          type: 'string',
+          enum: ['block', 'page'],
+          description: '计算坐标；同块 selection 默认 block，跨块 selection 必须显式 page'
+        }
       },
       required: ['elementIds', 'align'],
       additionalProperties: false
     }
   },
   {
-    name: 'editor_duplicate_elements',
-    description: '批量复制元素（默认偏移 +20/+20）。',
+    name: 'editor_get_elements_bounds',
+    description: '读取元素集合的包围盒和中心点。coordinateSpace=block 只接受同一 owner 区块并返回 block-local 坐标；page 可跨区块并通过 topMap 返回整页坐标。',
     inputSchema: {
       type: 'object',
       properties: {
-        elementIds: { type: 'array', items: { type: 'string' } },
+        elementIds: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1 }
+        },
+        coordinateSpace: {
+          type: 'string',
+          enum: ['block', 'page'],
+          default: 'block'
+        }
+      },
+      required: ['elementIds'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_duplicate_elements',
+    description: '批量复制元素；offsetX/offsetY 是各元素 owner 区块内的 block-local 偏移，默认 +20/+20。Bridge 会重建全部 ID、统一预检所有副本边界，并在批量写入异常时补偿删除已写入副本。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementIds: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1 }
+        },
         offsetX: { type: 'number' },
         offsetY: { type: 'number' }
       },
@@ -1087,11 +1357,16 @@ const TOOLS = [
   },
   {
     name: 'editor_move_elements_by_offset',
-    description: '批量移动元素（相对偏移 dx/dy）。',
+    description: '按相对偏移批量移动元素；可跨 owner 区块，但每个元素都在自己的 block-local 坐标中应用 dx/dy，并在任一元素越界时拒绝整次更新。',
     inputSchema: {
       type: 'object',
       properties: {
-        elementIds: { type: 'array', items: { type: 'string' } },
+        elementIds: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1 }
+        },
         dx: { type: 'number' },
         dy: { type: 'number' }
       },
@@ -1145,8 +1420,21 @@ const TOOLS = [
       type: 'object',
       properties: {
         slideId: { type: 'string' },
-        blocks: { type: 'array', description: '区块模板数组（exportSlide 产物或自定义结构）' },
-        index: { type: 'number', description: '插入位置，省略追加末尾' }
+        blocks: {
+          type: 'array',
+          minItems: 1,
+          items: { type: 'object', additionalProperties: true },
+          description: '区块模板对象数组（exportSlide 产物或自定义结构）'
+        },
+        index: { type: 'integer', minimum: 0, description: '插入位置，省略追加末尾' },
+        saveBeforeSwitch: {
+          type: 'boolean',
+          description: '目标不是当前页且当前页 dirty 时，先保存并回读再切换'
+        },
+        discardChanges: {
+          type: 'boolean',
+          description: '目标不是当前页且当前页 dirty 时，明确丢弃当前页改动再切换'
+        }
       },
       required: ['slideId', 'blocks'],
       additionalProperties: false
@@ -1413,30 +1701,6 @@ const TOOLS = [
       },
       required: ['action'],
       ...TEXT_TARGET_SELECTOR_SCHEMA,
-      allOf: [
-        {
-          if: { properties: { action: { const: 'insert' } } },
-          then: {
-            required: ['index'],
-            oneOf: [{ required: ['text'] }, { required: ['html'] }]
-          }
-        },
-        {
-          if: { properties: { action: { const: 'replace' } } },
-          then: {
-            required: ['index', 'length'],
-            oneOf: [{ required: ['text'] }, { required: ['html'] }]
-          }
-        },
-        {
-          if: { properties: { action: { const: 'delete' } } },
-          then: { required: ['index', 'length'] }
-        },
-        {
-          if: { properties: { action: { const: 'findReplace' } } },
-          then: { required: ['match'] }
-        }
-      ],
       additionalProperties: false
     }
   },
@@ -1460,19 +1724,12 @@ const TOOLS = [
             jump_type: { type: 'number', enum: [1, 2] },
             link_address: { type: 'string' },
             agent_id: { type: ['string', 'number'] },
-            agent_params: { type: 'array' }
+            agent_params: {
+              type: 'array',
+              items: { type: ['object', 'array', 'string', 'number', 'boolean', 'null'] }
+            }
           },
           required: ['input_type', 'link_mode', 'jump_type'],
-          allOf: [
-            {
-              if: { properties: { jump_type: { const: 1 } } },
-              then: { required: ['link_address'] }
-            },
-            {
-              if: { properties: { jump_type: { const: 2 } } },
-              then: { required: ['agent_id', 'agent_params'] }
-            }
-          ],
           description: 'HyperlinkTooltip 的真实元数据。URL 使用 jump_type=1 + link_address；智能体使用 jump_type=2 + 真实 agent_id/agent_params。优先复用 document.hyperlinks[].metadata。',
           additionalProperties: true
         },
@@ -1483,7 +1740,6 @@ const TOOLS = [
       },
       required: ['index', 'length'],
       ...TEXT_TARGET_SELECTOR_SCHEMA,
-      anyOf: [{ required: ['hyperlinkId'] }, { required: ['hyperlink'] }],
       additionalProperties: false
     }
   },
@@ -1503,10 +1759,6 @@ const TOOLS = [
         waitMs: TEXT_WAIT_SCHEMA
       },
       ...TEXT_TARGET_SELECTOR_SCHEMA,
-      anyOf: [
-        { required: ['hyperlinkId'] },
-        { required: ['index', 'length'] }
-      ],
       additionalProperties: false
     }
   },
@@ -1554,50 +1806,6 @@ const TOOLS = [
       },
       required: ['action', 'index'],
       ...TEXT_TARGET_SELECTOR_SCHEMA,
-      allOf: [
-        {
-          if: { properties: { action: { const: 'insert' } } },
-          then: { required: ['embedType', 'value'] }
-        },
-        {
-          if: { properties: { action: { const: 'update' } } },
-          then: { required: ['value'] }
-        },
-        {
-          if: {
-            properties: {
-              action: { const: 'insert' },
-              embedType: { const: 'pinyinBox' }
-            }
-          },
-          then: {
-            properties: {
-              value: {
-                type: 'object',
-                required: ['pinyin', 'word']
-              }
-            }
-          }
-        },
-        {
-          if: {
-            properties: {
-              action: { const: 'insert' },
-              embedType: { const: 'image' }
-            }
-          },
-          then: {
-            properties: {
-              value: {
-                oneOf: [
-                  { type: 'string', minLength: 1 },
-                  { type: 'object', required: ['url'] }
-                ]
-              }
-            }
-          }
-        }
-      ],
       additionalProperties: false
     }
   },
@@ -1750,10 +1958,6 @@ const TOOLS = [
         fitSize: { type: 'boolean' },
         waitMs: TEXT_WAIT_SCHEMA
       },
-      allOf: [
-        { oneOf: [{ required: ['sourceElementId'] }, { required: ['sourceTarget'] }] },
-        { oneOf: [{ required: ['targetElementIds'] }, { required: ['targetTargets'] }] }
-      ],
       additionalProperties: false
     }
   },
@@ -1770,7 +1974,7 @@ const TOOLS = [
   },
   {
     name: 'editor_batch',
-    description: '批量执行多个桥接步骤：一次调用内按顺序串行执行 steps（[{ method, args }]，method 为 window.__superEditor 方法名），一次返回全部结果，避免逐条调用等待。stopOnError=true（默认）遇错即停并返回已执行结果。适合合并独立小步骤（如 打快照+批量改元素+核对截图，或 getState+getSlide+listBlocks 一起读取）。',
+    description: '高级批量桥接调用：按顺序串行执行 steps（[{ method, args }]）。它不是事务，前序成功步骤不会因后序失败自动回滚；写操作前按需单独 checkpoint。禁止把 screenshot 放进 batch，截图必须单独调用 editor_screenshot，避免大 base64 混入文本结果。stopOnError 默认 true。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1781,7 +1985,11 @@ const TOOLS = [
             type: 'object',
             properties: {
               method: { type: 'string', description: 'window.__superEditor 方法名（如 addElement / updateElements / scrollToBlock / checkpoint / save）' },
-              args: { type: 'array', description: '传给该方法的参数数组（无参数传 []）' }
+              args: {
+                type: 'array',
+                items: { type: ['object', 'array', 'string', 'number', 'boolean', 'null'] },
+                description: '传给该方法的 JSON 参数数组（可包含对象、数组或标量；无参数传 []）'
+              }
             },
             required: ['method'],
             additionalProperties: false
@@ -1795,12 +2003,16 @@ const TOOLS = [
   },
   {
     name: 'editor_rpc_call',
-    description: '通用桥接方法调用：透传调用 window.__superEditor 上的任意方法（如 moveElement / resizeElement / rotateElement / duplicateElement / scrollToBlock / scrollToElement / canUndo / addSlide / deleteSlide / moveSlide 等未封装成专用 editor_* 工具的桥接方法）。',
+    description: '高级通用桥接调用：仅在没有 typed editor_* 工具时透传 window.__superEditor 方法。它绕过 MCP 的参数语义与持久化引导，调用前必须确认桥接签名及该方法是否立即写库。高频布局、视图、页面和区块操作请优先使用专用工具。',
     inputSchema: {
       type: 'object',
       properties: {
         method: { type: 'string', description: 'window.__superEditor 上的方法名' },
-        args: { type: 'array', description: '传给该方法的参数数组（无参数传 []）' }
+        args: {
+          type: 'array',
+          items: { type: ['object', 'array', 'string', 'number', 'boolean', 'null'] },
+          description: '传给该方法的 JSON 参数数组（可包含对象、数组或标量；无参数传 []）'
+        }
       },
       required: ['method'],
       additionalProperties: false
@@ -2006,6 +2218,120 @@ const TOOLS = [
     }
   },
 ]
+
+const WORKING_COPY_TOOL_NAMES = new Set([
+  'editor_render_questions_to_block',
+  'editor_apply_component',
+  'editor_apply_image',
+  'editor_add_block',
+  'editor_clone_block',
+  'editor_move_block',
+  'editor_replace_block',
+  'editor_copy_block_to_slide',
+  'editor_update_block',
+  'editor_delete_block',
+  'editor_rename_block',
+  'editor_import_blocks',
+  'editor_add_element',
+  'editor_update_element',
+  'editor_move_element',
+  'editor_move_elements',
+  'editor_resize_element',
+  'editor_rotate_element',
+  'editor_set_element_spacing',
+  'editor_center_element_in_block',
+  'editor_delete_element',
+  'editor_group_elements',
+  'editor_ungroup',
+  'editor_order_element',
+  'editor_align_elements',
+  'editor_duplicate_elements',
+  'editor_move_elements_by_offset',
+  'editor_rollback',
+  'editor_table_set_cell',
+  'editor_table_update',
+  'editor_table_structure',
+  'editor_table_fit_heights',
+  'editor_mind_set_node',
+  'editor_mind_structure',
+  'editor_mind_update',
+  'editor_text_set_content',
+  'editor_text_set_style',
+  'editor_text_edit',
+  'editor_text_set_link',
+  'editor_text_remove_link',
+  'editor_text_edit_embed',
+  'editor_text_format',
+  'editor_text_adaptive',
+  'editor_text_set_layout',
+  'editor_text_fit',
+  'editor_text_fit_to_box',
+  'editor_text_copy_style'
+])
+
+const IMMEDIATE_WRITE_TOOL_NAMES = new Set([
+  'editor_create_book',
+  'editor_save_verified',
+  'editor_restore_book_version',
+  'editor_add_slide',
+  'editor_delete_slide',
+  'editor_move_slide',
+  'editor_rename_slide',
+  'editor_duplicate_slide',
+  'editor_save',
+  'editor_create_digital_module',
+  'editor_update_digital_module',
+  'editor_delete_digital_module',
+  'editor_copy_digital_module',
+  'editor_add_questions_to_catalog',
+  'editor_remove_catalog_question',
+  'editor_move_catalog_question',
+  'editor_start_question_explanation_generation',
+  'editor_save_question_explanation',
+  'editor_delete_question_explanation',
+  'editor_outline_add',
+  'editor_outline_rename',
+  'editor_outline_delete',
+  'editor_outline_move',
+  'editor_outline_link_blocks',
+  'editor_outline_anchor_add',
+  'editor_outline_anchor_update',
+  'editor_outline_anchor_delete',
+  'editor_upload_file',
+  'editor_upload_image'
+])
+
+const SPECIAL_TOOL_DESCRIPTION_TAGS = {
+  editor_status: '[连接状态|不写库]',
+  editor_connect: '[连接状态|不写库]',
+  editor_jump_to_book: '[导航|改变编辑器上下文|不写库]',
+  editor_checkpoint: '[会话内快照|不写库]',
+  editor_list_checkpoints: '[会话内快照|不写库]',
+  editor_clear_checkpoints: '[会话内快照|不写库]',
+  editor_scroll_to_block: '[仅视图状态|不写库]',
+  editor_scroll_to_element: '[仅视图状态|不写库]',
+  editor_set_zoom: '[仅视图状态|不写库]',
+  editor_fit_canvas: '[仅视图状态|不写库]',
+  editor_outline_select: '[仅视图状态|不写库]',
+  editor_apply_template: '[按 kind：chapter 立即写库；block 工作副本写入]',
+  editor_select_slide:
+    '[按参数：切页只读；saveBeforeSwitch 立即写库；discardChanges 丢弃工作副本]',
+  editor_add_image_element: '[立即上传媒体+工作副本写入|元素需 saveVerified]',
+  editor_set_image_src: '[立即上传媒体+工作副本写入|元素需 saveVerified]',
+  editor_batch: '[高级混合调用|非事务|持久化语义取决于步骤]',
+  editor_rpc_call: '[高级混合调用|持久化语义取决于方法]'
+}
+
+for (const tool of TOOLS) {
+  const tag =
+    SPECIAL_TOOL_DESCRIPTION_TAGS[tool.name] ||
+    (IMMEDIATE_WRITE_TOOL_NAMES.has(tool.name)
+      ? '[立即写库|checkpoint不可恢复]'
+      : WORKING_COPY_TOOL_NAMES.has(tool.name)
+        ? '[工作副本写入|需 saveVerified|可 checkpoint]'
+        : '[只读]')
+  tool.description = `${tag} ${tool.description}`
+}
 
 class McpError extends Error {
   constructor(code, message) {
@@ -2629,6 +2955,348 @@ function validateTextToolArgs(name, args = {}) {
   }
 }
 
+function requireFiniteNumber(value, name, options = {}) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${name} 必须是有限数字`)
+  }
+  if (options.minimum !== undefined && value < options.minimum) {
+    throw new Error(`${name} 必须大于等于 ${options.minimum}`)
+  }
+  if (options.exclusiveMinimum !== undefined && value <= options.exclusiveMinimum) {
+    throw new Error(`${name} 必须大于 ${options.exclusiveMinimum}`)
+  }
+  if (options.maximum !== undefined && value > options.maximum) {
+    throw new Error(`${name} 必须小于等于 ${options.maximum}`)
+  }
+}
+
+function requirePlainObject(value, name, { nonEmpty = false } = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${name} 必须是对象`)
+  }
+  if (nonEmpty && Object.keys(value).length === 0) throw new Error(`${name} 不能为空对象`)
+}
+
+function validateSwitchSafetyOptions(args, toolName) {
+  for (const field of ['saveBeforeSwitch', 'discardChanges']) {
+    if (hasOwn(args, field) && typeof args[field] !== 'boolean') {
+      throw new Error(`${toolName}.${field} 必须是布尔值`)
+    }
+  }
+  if (args.saveBeforeSwitch === true && args.discardChanges === true) {
+    throw new Error(`${toolName}: saveBeforeSwitch 与 discardChanges 不能同时为 true`)
+  }
+}
+
+function validateExactOne(args, fields, toolName) {
+  const present = fields.filter((field) => {
+    if (!hasOwn(args, field)) return false
+    const value = args[field]
+    if (typeof value === 'string') return !!value.trim()
+    return value !== undefined && value !== null
+  })
+  if (present.length !== 1) {
+    throw new Error(`${toolName} 必须且只能提供 ${fields.join(' / ')} 之一`)
+  }
+}
+
+function validateCoreToolArgs(name, args = {}) {
+  const requiredStringFields = {
+    editor_select_slide: ['slideId'],
+    editor_delete_slide: ['slideId'],
+    editor_move_slide: ['slideId'],
+    editor_move_block: ['blockId'],
+    editor_replace_block: ['blockId'],
+    editor_copy_block_to_slide: ['blockId', 'targetSlideId'],
+    editor_update_block: ['blockId'],
+    editor_update_element: ['elementId'],
+    editor_move_element: ['elementId'],
+    editor_resize_element: ['elementId'],
+    editor_rotate_element: ['elementId'],
+    editor_center_element_in_block: ['elementId'],
+    editor_scroll_to_block: ['blockId'],
+    editor_scroll_to_element: ['elementId'],
+    editor_import_blocks: ['slideId']
+  }
+  for (const field of requiredStringFields[name] || []) {
+    requireNonEmptyString(args[field], field)
+  }
+
+  if (
+    [
+      'editor_select_slide',
+      'editor_add_slide',
+      'editor_delete_slide',
+      'editor_import_blocks',
+      'editor_copy_block_to_slide',
+      'editor_apply_template'
+    ].includes(name)
+  ) {
+    validateSwitchSafetyOptions(args, name)
+  }
+
+  if (name === 'editor_apply_template') {
+    if (!['chapter', 'block'].includes(args.kind)) {
+      throw new Error('editor_apply_template.kind 取值: chapter / block')
+    }
+    requireTextTargetId(args.templateId, 'templateId')
+    if (
+      args.kind === 'block' &&
+      (hasOwn(args, 'saveBeforeSwitch') || hasOwn(args, 'discardChanges'))
+    ) {
+      throw new Error('editor_apply_template: saveBeforeSwitch / discardChanges 仅适用于 chapter')
+    }
+    if (hasOwn(args, 'index') && (!Number.isInteger(args.index) || args.index < 0)) {
+      throw new Error('editor_apply_template.index 必须是非负整数')
+    }
+  }
+
+  if (name === 'editor_add_slide') {
+    if (hasOwn(args, 'name')) requireNonEmptyString(args.name, 'name')
+    if (hasOwn(args, 'templateId')) requireTextTargetId(args.templateId, 'templateId')
+    if (hasOwn(args, 'templateType')) requireFiniteNumber(args.templateType, 'templateType')
+  }
+
+  if (name === 'editor_apply_image') {
+    validateExactOne(args, ['imageId', 'url'], name)
+    validateExactOne(args, ['blockId', 'elementId'], name)
+    if (hasOwn(args, 'url')) requireNonEmptyString(args.url, 'url')
+  }
+  if (name === 'editor_upload_file') {
+    validateExactOne(args, ['filePath', 'data'], name)
+    const field = hasOwn(args, 'filePath') ? 'filePath' : 'data'
+    requireNonEmptyString(args[field], field)
+  }
+  if (['editor_add_image_element', 'editor_set_image_src'].includes(name)) {
+    validateExactOne(args, ['url', 'imagePath', 'data'], name)
+    const field = ['url', 'imagePath', 'data'].find(
+      (candidate) => hasOwn(args, candidate) && String(args[candidate] || '').trim()
+    )
+    requireNonEmptyString(args[field], field)
+  }
+  if (name === 'editor_copy_digital_module') {
+    validateExactOne(args, ['sourceElementId', 'modelId'], name)
+    requireNonEmptyString(args.targetElementId, 'targetElementId')
+    if (hasOwn(args, 'sourceElementId')) {
+      requireNonEmptyString(args.sourceElementId, 'sourceElementId')
+    }
+    if (hasOwn(args, 'replaceExisting')) {
+      throw new Error(
+        'editor_copy_digital_module 不支持 replaceExisting；目标已有模块时请显式 delete 后再 copy'
+      )
+    }
+  }
+
+  if (['editor_update_block', 'editor_update_element'].includes(name)) {
+    requirePlainObject(args.patch, 'patch', { nonEmpty: true })
+  }
+  if (name === 'editor_replace_block') {
+    requirePlainObject(args.templateData, 'templateData', { nonEmpty: true })
+  }
+
+  if (['editor_move_slide', 'editor_move_block'].includes(name)) {
+    if (!Number.isInteger(args.toIndex) || args.toIndex < 0) {
+      throw new Error(`${name}.toIndex 必须是非负整数`)
+    }
+  }
+  if (name === 'editor_import_blocks') {
+    if (!Array.isArray(args.blocks) || !args.blocks.length) {
+      throw new Error('editor_import_blocks.blocks 必须是非空对象数组')
+    }
+    args.blocks.forEach((block, index) => requirePlainObject(block, `blocks[${index}]`))
+    if (hasOwn(args, 'index') && (!Number.isInteger(args.index) || args.index < 0)) {
+      throw new Error('editor_import_blocks.index 必须是非负整数')
+    }
+  }
+  if (
+    name === 'editor_copy_block_to_slide' &&
+    hasOwn(args, 'index') &&
+    (!Number.isInteger(args.index) || args.index < 0)
+  ) {
+    throw new Error('editor_copy_block_to_slide.index 必须是非负整数')
+  }
+
+  if (name === 'editor_move_element') {
+    requireFiniteNumber(args.x, 'x')
+    requireFiniteNumber(args.y, 'y')
+  }
+  if (name === 'editor_move_elements') {
+    if (!Array.isArray(args.elementIds) || !args.elementIds.length) {
+      throw new Error('editor_move_elements.elementIds 必须是非空数组')
+    }
+    const ids = args.elementIds.map((id) => String(id || '').trim())
+    if (ids.some((id) => !id)) throw new Error('elementIds 不能包含空 id')
+    if (new Set(ids).size !== ids.length) throw new Error('elementIds 不能重复')
+    requireFiniteNumber(args.x, 'x')
+    requireFiniteNumber(args.y, 'y')
+  }
+  if (name === 'editor_resize_element') {
+    requireFiniteNumber(args.width, 'width', { exclusiveMinimum: 0 })
+    requireFiniteNumber(args.height, 'height', { exclusiveMinimum: 0 })
+  }
+  if (name === 'editor_rotate_element') requireFiniteNumber(args.angle, 'angle')
+  if (name === 'editor_set_element_spacing') {
+    if (!Array.isArray(args.elementIds) || args.elementIds.length < 2) {
+      throw new Error('editor_set_element_spacing.elementIds 至少需要两个元素 id')
+    }
+    const ids = args.elementIds.map((id) => String(id || '').trim())
+    if (ids.some((id) => !id)) throw new Error('elementIds 不能包含空 id')
+    if (new Set(ids).size !== ids.length) throw new Error('elementIds 不能重复')
+    if (!['horizontal', 'vertical'].includes(args.direction)) {
+      throw new Error('direction 取值: horizontal / vertical')
+    }
+    requireFiniteNumber(args.spacing, 'spacing')
+  }
+  if (name === 'editor_move_elements_by_offset') {
+    if (!Array.isArray(args.elementIds) || !args.elementIds.length) {
+      throw new Error('editor_move_elements_by_offset.elementIds 必须是非空数组')
+    }
+    const ids = args.elementIds.map((id) => String(id || '').trim())
+    if (ids.some((id) => !id)) throw new Error('elementIds 不能包含空 id')
+    if (new Set(ids).size !== ids.length) throw new Error('elementIds 不能重复')
+    if (hasOwn(args, 'dx')) requireFiniteNumber(args.dx, 'dx')
+    if (hasOwn(args, 'dy')) requireFiniteNumber(args.dy, 'dy')
+  }
+  if (name === 'editor_duplicate_elements') {
+    if (!Array.isArray(args.elementIds) || !args.elementIds.length) {
+      throw new Error('editor_duplicate_elements.elementIds 必须是非空数组')
+    }
+    const ids = args.elementIds.map((id) => String(id || '').trim())
+    if (ids.some((id) => !id)) throw new Error('elementIds 不能包含空 id')
+    if (new Set(ids).size !== ids.length) throw new Error('elementIds 不能重复')
+    if (hasOwn(args, 'offsetX')) requireFiniteNumber(args.offsetX, 'offsetX')
+    if (hasOwn(args, 'offsetY')) requireFiniteNumber(args.offsetY, 'offsetY')
+  }
+  if (['editor_align_elements', 'editor_get_elements_bounds'].includes(name)) {
+    if (!Array.isArray(args.elementIds) || !args.elementIds.length) {
+      throw new Error(`${name}.elementIds 必须是非空数组`)
+    }
+    const ids = args.elementIds.map((id) => String(id || '').trim())
+    if (ids.some((id) => !id)) throw new Error('elementIds 不能包含空 id')
+    if (new Set(ids).size !== ids.length) throw new Error('elementIds 不能重复')
+  }
+  if (name === 'editor_align_elements') {
+    if (
+      ![
+        'top',
+        'bottom',
+        'left',
+        'right',
+        'horizontal',
+        'vertical',
+        'center',
+        'hdengju',
+        'vdengju'
+      ].includes(args.align)
+    ) {
+      throw new Error(
+        'align 取值: top / bottom / left / right / horizontal / vertical / center / hdengju / vdengju'
+      )
+    }
+    if (hasOwn(args, 'target') && !['selection', 'block', 'page'].includes(args.target)) {
+      throw new Error('target 取值: selection / block / page')
+    }
+    if (
+      hasOwn(args, 'coordinateSpace') &&
+      !['block', 'page'].includes(args.coordinateSpace)
+    ) {
+      throw new Error('coordinateSpace 取值: block / page')
+    }
+    if (args.target === 'block' && args.coordinateSpace === 'page') {
+      throw new Error('target=block 时 coordinateSpace 必须为 block')
+    }
+    if (args.target === 'page' && args.coordinateSpace === 'block') {
+      throw new Error('target=page 时 coordinateSpace 必须为 page')
+    }
+  }
+  if (
+    name === 'editor_get_elements_bounds' &&
+    hasOwn(args, 'coordinateSpace') &&
+    !['block', 'page'].includes(args.coordinateSpace)
+  ) {
+    throw new Error('coordinateSpace 取值: block / page')
+  }
+  if (
+    name === 'editor_center_element_in_block' &&
+    hasOwn(args, 'axis') &&
+    !['horizontal', 'vertical', 'both'].includes(args.axis)
+  ) {
+    throw new Error('axis 取值: horizontal / vertical / both')
+  }
+  if (name === 'editor_set_zoom') {
+    requireFiniteNumber(args.scale, 'scale', { minimum: 0.1, maximum: 3 })
+  }
+
+  if (name === 'editor_batch') {
+    if (!Array.isArray(args.steps) || !args.steps.length) {
+      throw new Error('editor_batch.steps 必须是非空数组')
+    }
+    if (hasOwn(args, 'stopOnError') && typeof args.stopOnError !== 'boolean') {
+      throw new Error('editor_batch.stopOnError 必须是布尔值')
+    }
+    args.steps.forEach((step, index) => {
+      requirePlainObject(step, `steps[${index}]`)
+      requireNonEmptyString(step.method, `steps[${index}].method`)
+      if (hasOwn(step, 'args') && !Array.isArray(step.args)) {
+        throw new Error(`steps[${index}].args 必须是 JSON 参数数组`)
+      }
+      const method = step.method.trim()
+      if (['screenshot', 'captureScreenshot', 'editor_screenshot'].includes(method)) {
+        throw new Error('editor_batch 禁止截图步骤；请把 editor_screenshot 作为单独工具调用')
+      }
+      if (method === 'batch') throw new Error('editor_batch 不允许嵌套 batch')
+    })
+  }
+  if (name === 'editor_rpc_call') {
+    requireNonEmptyString(args.method, 'method')
+    if (hasOwn(args, 'args') && !Array.isArray(args.args)) {
+      throw new Error('editor_rpc_call.args 必须是 JSON 参数数组')
+    }
+    if (['screenshot', 'captureScreenshot', 'editor_screenshot'].includes(args.method.trim())) {
+      throw new Error('editor_rpc_call 不返回截图 base64；请使用 editor_screenshot')
+    }
+  }
+}
+
+async function saveCurrentEditorStateVerified(state, operation) {
+  const currentSlideId = state && state.currentSlideId
+  if (currentSlideId === undefined || currentSlideId === null || currentSlideId === '') {
+    throw new Error(`${operation}: 无法确定 dirty 当前页，已拒绝切页前保存`)
+  }
+  return driver.bridgeCall('saveVerified', [
+    { scope: 'current', verify: true, expectedSlideId: currentSlideId }
+  ])
+}
+
+async function preflightVerifiedSwitch(args, options = {}) {
+  if (args.saveBeforeSwitch !== true) return { checked: false, saved: false }
+  const state = await driver.bridgeCall('getState')
+  const leavesCurrent =
+    options.alwaysLeavesCurrent === true ||
+    (typeof options.leavesCurrent === 'function' && options.leavesCurrent(state))
+  if (!leavesCurrent || !state.dirty) {
+    return { checked: true, saved: false, state }
+  }
+  await saveCurrentEditorStateVerified(state, options.operation || '安全切页')
+  return { checked: true, saved: true, state }
+}
+
+async function prepareCrossPageBlockCopy(args) {
+  const state = await driver.bridgeCall('getState')
+  if (String(state.currentSlideId) === String(args.targetSlideId) || !state.dirty) return
+  if (args.discardChanges === true) {
+    throw new Error(
+      '跨页复制不能一边复制 dirty 源内容一边丢弃；请先 editor_save_verified，或回滚/清理改动后再复制'
+    )
+  }
+  if (args.saveBeforeSwitch !== true) {
+    throw new Error(
+      '当前页有未保存改动；跨页复制前请传 saveBeforeSwitch: true，以保存并回读源区块'
+    )
+  }
+  await saveCurrentEditorStateVerified(state, '跨页复制区块')
+}
+
 function getTextTargetSelector(args = {}) {
   return hasOwn(args, 'target') ? { target: args.target } : { elementId: args.elementId }
 }
@@ -2636,6 +3304,7 @@ function getTextTargetSelector(args = {}) {
 async function callTool(name, args) {
   validateQuestionToolArgs(name, args)
   validateTextToolArgs(name, args)
+  validateCoreToolArgs(name, args)
   let data
   switch (name) {
     case 'editor_status': {
@@ -2680,6 +3349,15 @@ async function callTool(name, args) {
     case 'editor_plan_question_lesson':
     case 'editor_render_questions_to_block':
     case 'editor_audit_content': {
+      if (name === 'editor_render_questions_to_block') {
+        await preflightVerifiedSwitch(args, {
+          operation: '跨页渲染题目',
+          leavesCurrent: (state) =>
+            args.slideId !== undefined &&
+            args.slideId !== null &&
+            String(args.slideId) !== String(state.currentSlideId)
+        })
+      }
       const call = prepareBookAuthoringCall(name, args)
       data = await driver.bridgeCall(call.method, call.args)
       break
@@ -2691,6 +3369,12 @@ async function callTool(name, args) {
       data = await driver.bridgeCall('getTemplateDetail', [args])
       break
     case 'editor_apply_template':
+      if (args.kind === 'chapter') {
+        await preflightVerifiedSwitch(args, {
+          operation: '应用样章模板并新增目录',
+          alwaysLeavesCurrent: true
+        })
+      }
       data = await driver.bridgeCall('applyTemplate', [args])
       break
     case 'editor_search_components':
@@ -2782,19 +3466,43 @@ async function callTool(name, args) {
       data = await driver.bridgeCall('getSlide', [args.slideId])
       break
     case 'editor_select_slide': {
-      for (const field of ['saveBeforeSwitch', 'discardChanges']) {
-        if (hasOwn(args, field) && typeof args[field] !== 'boolean') {
-          throw new Error(`${field} 必须是布尔值`)
-        }
-      }
-      if (args.saveBeforeSwitch === true && args.discardChanges === true) {
-        throw new Error('saveBeforeSwitch 与 discardChanges 不能同时为 true')
-      }
+      await preflightVerifiedSwitch(args, {
+        operation: '切换目录',
+        leavesCurrent: (state) => String(args.slideId) !== String(state.currentSlideId)
+      })
       const hasSafetyOption =
         hasOwn(args, 'saveBeforeSwitch') || hasOwn(args, 'discardChanges')
       data = await driver.bridgeCall('selectSlide', [hasSafetyOption ? args : args.slideId])
       break
     }
+    case 'editor_add_slide': {
+      await preflightVerifiedSwitch(args, {
+        operation: '新增并切换目录',
+        alwaysLeavesCurrent: true
+      })
+      const payload = {
+        name: args.name,
+        parentId: args.parentId,
+        saveBeforeSwitch: args.saveBeforeSwitch,
+        discardChanges: args.discardChanges
+      }
+      if (hasOwn(args, 'templateId')) {
+        payload.template_id = args.templateId
+        payload.type = hasOwn(args, 'templateType') ? args.templateType : 3
+      }
+      data = await driver.bridgeCall('addSlide', [payload])
+      break
+    }
+    case 'editor_delete_slide':
+      await preflightVerifiedSwitch(args, {
+        operation: '删除当前目录',
+        leavesCurrent: (state) => String(args.slideId) === String(state.currentSlideId)
+      })
+      data = await driver.bridgeCall('deleteSlide', [args])
+      break
+    case 'editor_move_slide':
+      data = await driver.bridgeCall('moveSlide', [args])
+      break
     case 'editor_add_block':
       data = await driver.bridgeCall('addBlock', [args])
       break
@@ -2804,6 +3512,20 @@ async function callTool(name, args) {
     case 'editor_clone_block':
       data = await driver.bridgeCall('cloneBlock', [args.blockId, { afterBlockId: args.afterBlockId, name: args.name }])
       break
+    case 'editor_move_block':
+      data = await driver.bridgeCall('moveBlock', [args])
+      break
+    case 'editor_replace_block':
+      data = await driver.bridgeCall('replaceBlock', [args.blockId, args.templateData])
+      break
+    case 'editor_copy_block_to_slide':
+      await prepareCrossPageBlockCopy(args)
+      data = await driver.bridgeCall('copyBlockToSlide', [
+        args.blockId,
+        args.targetSlideId,
+        { index: args.index }
+      ])
+      break
     case 'editor_delete_block':
       data = await driver.bridgeCall('deleteBlock', [args.blockId])
       break
@@ -2812,6 +3534,28 @@ async function callTool(name, args) {
       break
     case 'editor_update_element':
       data = await driver.bridgeCall('updateElement', [args])
+      break
+    case 'editor_move_element':
+      data = await driver.bridgeCall('moveElements', [
+        { elementIds: [args.elementId], x: args.x, y: args.y }
+      ])
+      break
+    case 'editor_move_elements':
+      data = await driver.bridgeCall('moveElements', [args])
+      break
+    case 'editor_resize_element':
+      data = await driver.bridgeCall('resizeElement', [args])
+      break
+    case 'editor_rotate_element':
+      data = await driver.bridgeCall('rotateElement', [args])
+      break
+    case 'editor_set_element_spacing':
+      data = await driver.bridgeCall('setElementSpacing', [args])
+      break
+    case 'editor_center_element_in_block':
+      data = await driver.bridgeCall('centerElementInBlock', [
+        { elementId: args.elementId, axis: args.axis || 'both' }
+      ])
       break
     case 'editor_delete_element':
       data = await driver.bridgeCall('deleteElement', [args.elementId])
@@ -2852,6 +3596,21 @@ async function callTool(name, args) {
     case 'editor_get_canvas_tree':
       data = await driver.bridgeCall('getCanvasTree')
       break
+    case 'editor_get_canvas_info':
+      data = await driver.bridgeCall('getCanvasInfo')
+      break
+    case 'editor_scroll_to_block':
+      data = await driver.bridgeCall('scrollToBlock', [args.blockId])
+      break
+    case 'editor_scroll_to_element':
+      data = await driver.bridgeCall('scrollToElement', [args.elementId])
+      break
+    case 'editor_set_zoom':
+      data = await driver.bridgeCall('setZoom', [args.scale])
+      break
+    case 'editor_fit_canvas':
+      data = await driver.bridgeCall('fitCanvas')
+      break
     case 'editor_get_element':
       data = await driver.bridgeCall('getElement', [args.elementId])
       break
@@ -2863,6 +3622,12 @@ async function callTool(name, args) {
       break
     case 'editor_align_elements':
       data = await driver.bridgeCall('alignElements', [args])
+      break
+    case 'editor_get_elements_bounds':
+      data = await driver.bridgeCall('getElementsBounds', [
+        args.elementIds,
+        { coordinateSpace: args.coordinateSpace || 'block' }
+      ])
       break
     case 'editor_duplicate_elements':
       data = await driver.bridgeCall('duplicateElements', [args.elementIds, { offsetX: args.offsetX, offsetY: args.offsetY }])
@@ -2883,7 +3648,19 @@ async function callTool(name, args) {
       data = await driver.bridgeCall('exportSlide', [args.slideId])
       break
     case 'editor_import_blocks':
-      data = await driver.bridgeCall('importBlocks', [args.slideId, args.blocks, { index: args.index }])
+      await preflightVerifiedSwitch(args, {
+        operation: '跨页导入区块',
+        leavesCurrent: (state) => String(args.slideId) !== String(state.currentSlideId)
+      })
+      data = await driver.bridgeCall('importBlocks', [
+        args.slideId,
+        args.blocks,
+        {
+          index: args.index,
+          saveBeforeSwitch: args.saveBeforeSwitch,
+          discardChanges: args.discardChanges
+        }
+      ])
       break
     case 'editor_table_info': {
       const [info, grid] = await Promise.all([

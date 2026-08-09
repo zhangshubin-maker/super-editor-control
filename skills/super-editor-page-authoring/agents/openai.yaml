@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor Current Page"
+  short_description: "Compose and verify one current courseware page"
+  default_prompt: "Use $super-editor-page-authoring to compose and verify the current courseware page."
