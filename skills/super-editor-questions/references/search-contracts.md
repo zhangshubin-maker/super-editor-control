@@ -35,7 +35,7 @@
 - `bookId`、`catalogId`：通常由 Bridge 从当前页面补齐；仅查询其他明确上下文时覆盖。
 - `pathId`：来自 `editor_list_question_paths`。
 - `quesScope`：学习路径题目范围；`1` 常规题，`2` 定制题。
-- `pageNo` 从 0 开始；`pageSize` 保持小批量。
+- `pageNo` 是从 0 开始的整数；`pageSize` 范围 1..100，默认 20，先用小页比较候选再按响应分页继续。
 - 高级筛选包括 `period/subjectId/gradeId/volume/difficulty/features/guidList`、
   `haveResolution/haveReview/haveSolution/haveSolutionVideo`、`subModelIds/searchAreaTypes`、
   `sourceInfos/businessTypes/haveTag/tagNodeIds`；值必须来自

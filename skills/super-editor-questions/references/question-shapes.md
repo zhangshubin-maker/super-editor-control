@@ -62,4 +62,4 @@
 - 记录 `parentGuid` 与实际选中子题 GUID；禁止根据“第 1 小题”拼 GUID。
 - 不要同时选择父题和已被该父题整体包含的子题，除非实时模块语义明确要求。
 - 查询单个子题时仍检查返回的父题关系；同名题不能按题干文本去重。
-- `editor_validate_question_selection` 的诊断结果优先于模型凭题干做出的兼容性猜测。
+- 已有真实数字模块目标时，`editor_validate_question_selection` 的诊断结果优先于模型凭题干做出的兼容性猜测；纯画布排版没有 `targetModuleType` 时不要为调用该工具虚构类型。

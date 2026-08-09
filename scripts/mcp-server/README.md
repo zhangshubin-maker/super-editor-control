@@ -51,7 +51,11 @@ node index.js
 |------|------|
 | `editor_status` / `editor_connect` | 查看可用页面 / 主动重新选择页面 |
 | `editor_get_state` / `editor_get_slide` | 读取课件与页面 |
+| `editor_list_slides` / `editor_select_slide` | 列出并安全切换目录；dirty 时显式保存或丢弃改动 |
 | `editor_search_books` / `editor_get_book` / `editor_create_book` | 搜索、核对并创建书本 |
+| `editor_get_book_manifest` / `editor_search_book_content` | 按当前目录或显式整书范围理解、搜索课件内容 |
+| `editor_save_verified` | 保存当前 dirty 页并回读校验；可显式执行整书摘要校验 |
+| `editor_list_book_versions` / `editor_get_book_version` / `editor_restore_book_version` | 查询、预检和恢复后端持久版本 |
 | `editor_search_templates` / `editor_apply_template` | 搜索并应用模板 |
 | `editor_search_components` / `editor_apply_component` | 搜索并应用组件 |
 | `editor_search_images` / `editor_apply_image` | 搜索并应用图片素材 |
@@ -63,6 +67,7 @@ node index.js
 | `editor_list_question_paths` / `editor_get_question_search_options` | 读取本书学习路径和题目筛选字典 |
 | `editor_search_questions` / `editor_get_questions` | 查询当前目录、本书资源、学习路径或总题库，并按 GUID 读取详情 |
 | `editor_validate_question_selection` / `editor_get_question_solutions` | 校验数字模块选题并读取答案、解答和解析 |
+| `editor_plan_question_lesson` / `editor_render_questions_to_block` | 按题库题目规划并排版讲解、练习或测评课件 |
 | `editor_add_questions_to_catalog` / `editor_remove_catalog_question` / `editor_move_catalog_question` | 管理目录题目资源及顺序（即时写库） |
 | `editor_get_question_explanations` / `editor_start_question_explanation_generation` / `editor_get_question_explanation_status` | 读取、启动生成和查询 AI 讲解 |
 | `editor_save_question_explanation` / `editor_delete_question_explanation` | 保存或删除 AI 讲解记录（即时写库） |
@@ -77,10 +82,33 @@ node index.js
 | `editor_text_fit` / `editor_text_fit_to_box` | 让文本框适应内容 / 保持框大小并缩小字号 |
 | `editor_text_search` / `editor_text_copy_style` / `editor_text_fonts` | 搜索文本、复制样式和查询可用字体 |
 | `editor_checkpoint` / `editor_rollback` | 整页快照与回滚 |
+| `editor_audit_content` | 按当前目录或显式整书范围审计结构、文本、资源和布局 |
 | `editor_save` / `editor_screenshot` | 保存与渲染核对 |
 | `editor_batch` | 一次往返串行执行多个桥接步骤 |
 
 完整工具以 `tools/list` 为准，桥接契约见 `../../assets/bridge-api-spec.md`。
+
+## 整书工具的调用粒度
+
+- 所有整书相关读取默认 `scope=current`；manifest 和题目规划同时默认 `detail=summary`。一次文字、
+  元素或当前区块修改不应先扫描整书。
+- 只有任务明确涉及跨目录规划、统一或验收时才传 `scope=book`。`editor_get_book_manifest` 使用
+  `pageNo/pageSize` 分页；`editor_search_book_content(scope=book)` 同样可用 `pageNo/pageSize`
+  限定本次搜索的目录页。
+- `editor_audit_content(scope=book)` 使用非负整数 `cursor` 和最大 100 的 `limit` 分批返回；继续
+  审计时把上次结果的 `nextCursor` 原样传回，直到它为 `null`。
+- `detail=deep` 只用于确实需要正文、区块和关联数据的宏观任务。普通定位先调用
+  `editor_search_book_content`，再针对命中目录读取，不要直接深读所有目录。
+- `editor_save_verified(scope=book)` 只保存当前 dirty 页，随后做整书摘要校验；它不会逐页切换和
+  重写全书。
+- `editor_list_book_versions(scope=book)` 用 `pageNo/pageSize` 分页目录，再用
+  `versionPageNo/versionPageSize` 分页每个目录的版本，避免隐式请求所有目录的全部历史。
+- 新目录设计优先用 `editor_search_templates` / `editor_get_template` 搜索样章和区块模板，参考其
+  成熟结构与风格。先应用模板得到真实目标区块，再向该 `blockId` 排版题目；题目编排的
+  `styleReference` 只记录/核对参考来源，不会自行下载模板或替换真实题目内容。
+- 版本恢复和题目区块写入先使用 `validateOnly=true`；确认影响范围后再实际写入。
+- `editor_select_slide` 仅传 `slideId` 时兼容原调用；当前页 dirty 时必须额外传
+  `saveBeforeSwitch=true` 或 `discardChanges=true`，两者不能同时为 true。
 
 ## 数字模块与媒体文件
 
@@ -96,7 +124,7 @@ node index.js
 - 本地文件经 base64 进入 RPC，当前主动限制为 70MB。更大的音视频应先压缩，或使用素材库/
   AI 生成服务返回的远程 URL，避免 100MB broker 请求上限和 90 秒 RPC 超时。
 
-## 题目检索、目录资源与 AI 讲解
+## 题目检索、课件编排、目录资源与 AI 讲解
 
 - `editor_search_questions.scope` 支持：
   - `currentCatalog`：当前目录已添加的题目资源；
@@ -111,6 +139,11 @@ node index.js
   `returnEnvelope=true`）返回 `items/requestedGuids/foundGuids/missingGuids`，避免静默丢失 GUID。
 - 创建答题类数字模块前调用 `editor_validate_question_selection`，检查缺失、重复、父子题冲突以及
   目标模块类型的数量和资源要求。最终关联使用题目/子题 `guid`，不要使用列表记录的数值 id。
+- `editor_plan_question_lesson` 只读：根据题目 GUID、教学目标和 `layout=auto/practice/explain/assessment`
+  形成编排计划。它只处理显式 GUID，即使 `scope=book` 也不会扫描整书；`detail=summary` 只读取
+  题目详情，`detail=deep` 才预检题目组件和数据。`styleReference` 记录预先选定的样章/区块模板来源。
+- `editor_render_questions_to_block` 把计划或 GUID 排版到画布区块；默认 `append`，`replace` 会替换
+  目标区块内容。先传 `validateOnly=true` 检查题目、目录和区块，再执行并保存当前页。
 - 删除和移动目录题目使用 `resourceMappingId`，不是题目 GUID。目录题目的新增、删除、排序都会立即
   写入后端，不依赖 `editor_save`；新增支持 `validateOnly=true`。
 - AI 讲解生成采用启动/状态分离：先调用 `editor_start_question_explanation_generation`，再按需调用

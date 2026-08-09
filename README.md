@@ -4,7 +4,7 @@
 
 - stdio MCP 适配器：向 Codex 提供结构化 `editor_*` 工具。
 - 本机浏览器 RPC 中继：在 `127.0.0.1:8765` 维护页面实例、命令队列和结果回传。
-- 编辑工作流技能：覆盖书本、模板、素材、题目检索/诊断/目录管理/AI 讲解、数字模块、结构化富文本、页面、区块、元素、大纲、保存和回滚。
+- 编辑工作流技能：覆盖整书结构理解与搜索、持久版本、内容审计、书本、模板、素材、题目检索/编排/诊断/目录管理/AI 讲解、数字模块、结构化富文本、页面、区块、元素、大纲、保存和回滚。
 
 整个正式链路不依赖 Electron、CDP、浏览器调试端口或正式环境后端 RPC 路由。
 
@@ -45,6 +45,26 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
 
 `editor_status` 是只读检查，不会长期占用页面。`editor_connect` 仅用于主动重新选择页面。
 
+## 整书创作与调用粒度
+
+整书工具遵循“小改动小调用、大任务大调用”：
+
+- `editor_get_book_manifest` 默认 `scope=current, detail=summary`，只读当前目录轻量摘要；只有明确
+  需要整书规划时才传 `scope=book`，只有需要正文/区块等较大数据时才显式传
+  `detail=standard/deep`。整书结果通过 `pageNo/pageSize` 分页。
+- `editor_search_book_content` 默认只搜索当前目录的普通文本、表格单元格和思维导图节点；跨目录
+  搜索必须显式传 `scope=book`。
+- `editor_save_verified` 默认保存并回读校验当前目录。`scope=book` 仍只保存当前 dirty 页，再做
+  整书摘要校验，不会为一次小改动逐页切换和重写全书。
+- `editor_list_book_versions`、`editor_get_book_version` 和 `editor_restore_book_version` 使用后端
+  持久版本；整书列表用 `pageNo/pageSize` 分页目录，再用
+  `versionPageNo/versionPageSize` 分页每个目录的版本。恢复前优先 `validateOnly=true` 预览影响范围。
+- `editor_audit_content` 默认只检查当前目录；整书审计必须显式 `scope=book`，并通过
+  `cursor/limit` 分批检查结构、文本、资源和布局。
+
+设计新目录时，先搜索本书样章模板和区块模板，从成熟内容中参考版式、字体、色彩、间距和区块结构，
+再填充当前教学内容。不要因为一次文字或元素小修改而先构建整书 manifest。
+
 ## 题目能力
 
 - 用 `editor_list_question_paths` 和 `editor_get_question_search_options` 获取真实路径与筛选字典。
@@ -52,6 +72,11 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
   `learningPath` 兼容别名，不提供无界 `all` 搜索。
 - 用 `editor_get_questions`、`editor_get_question_solutions` 和
   `editor_validate_question_selection` 核对详情、缺失 GUID、父子题冲突及答题模块兼容性。
+- 用 `editor_plan_question_lesson` 根据已选 GUID 形成讲解、练习或测评编排；它只处理明确题目，
+  即使 `scope=book` 也不会扫描整本书。
+- 用 `editor_render_questions_to_block` 预检并把题目排版到指定区块；默认追加，替换已有内容时
+  必须显式 `mode=replace`。需要复用成熟风格时，先应用样章/区块模板，再把生成的区块作为
+  `blockId`；`styleReference` 用于记录和核对参考来源，不会自行下载模板。
 - 用 `editor_add_questions_to_catalog`、`editor_remove_catalog_question`、
   `editor_move_catalog_question` 管理目录题目。添加使用题目 GUID，移除/排序使用目录关系
   `resourceMappingId`。
@@ -60,7 +85,8 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
   `editor_delete_question_explanation` 准备 type 94 所需讲解记录 ID。生成是异步任务，start
   会立即返回，不在一次 MCP 调用中长轮询。
 
-目录题目和讲解写操作立即持久化，不依赖 `editor_save`，也不能由画布快照回滚。当前版本不包含完整题目编辑、OCR/AI 录题或把题目排版插入画布区块。
+目录题目和讲解写操作立即持久化，不依赖 `editor_save`，也不能由画布快照回滚。题目排版写入画布后
+仍需保存当前页，并可在写入前使用 `validateOnly=true`。当前版本不包含完整题目编辑或 OCR/AI 录题。
 
 ## 文本能力
 
@@ -179,6 +205,7 @@ codex plugin add super-editor-control@super-editor-control
 - `scripts/mcp-server/start.ps1`：Windows 自动定位 Codex 捆绑或系统 Node 运行时。
 - `scripts/setup-mcp.sh`：macOS/Linux 探测 Node 并生成本机 MCP 配置。
 - `scripts/mcp-server/index.js`：MCP 工具适配器。
+- `scripts/mcp-server/bookAuthoring.js`：整书结构、搜索、版本、题目编排和内容审计工具定义与轻重调用约束。
 - `scripts/mcp-server/rpc-broker.js`：本机 RPC 中继、选主接管、页面租约和故障语义。
 - `skills/`：总控及书本、素材、题目、数字模块、状态、区块、元素、画布、大纲子技能。
 - `assets/bridge-api-spec.md`：`window.__superEditor` 桥接契约。

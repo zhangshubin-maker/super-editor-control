@@ -554,3 +554,322 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
     await client.close()
   }
 })
+
+test('整书创作工具默认保持当前目录轻调用，整书和深读必须显式请求', async () => {
+  const client = createMockClient()
+  try {
+    const listed = await client.request('tools/list')
+    const tools = listed.result.tools
+    const names = tools.map((tool) => tool.name)
+    const authoringTools = [
+      'editor_get_book_manifest',
+      'editor_search_book_content',
+      'editor_save_verified',
+      'editor_list_book_versions',
+      'editor_get_book_version',
+      'editor_restore_book_version',
+      'editor_plan_question_lesson',
+      'editor_render_questions_to_block',
+      'editor_audit_content'
+    ]
+    authoringTools.forEach((name) => assert.ok(names.includes(name), `缺少工具 ${name}`))
+
+    const manifestTool = tools.find((tool) => tool.name === 'editor_get_book_manifest')
+    assert.deepEqual(manifestTool.inputSchema.properties.scope.enum, ['current', 'book'])
+    assert.deepEqual(manifestTool.inputSchema.properties.detail.enum, [
+      'summary',
+      'standard',
+      'deep'
+    ])
+    assert.equal(manifestTool.inputSchema.properties.pageSize.maximum, 200)
+    assert.equal(manifestTool.inputSchema.properties.include.type, 'object')
+    assert.match(manifestTool.description, /默认 scope=current、detail=summary/)
+
+    const searchTool = tools.find((tool) => tool.name === 'editor_search_book_content')
+    assert.deepEqual(searchTool.inputSchema.properties.targetKinds.items.enum, [
+      'element',
+      'tableCell',
+      'mindNode'
+    ])
+    assert.equal(searchTool.inputSchema.properties.detail, undefined)
+    assert.equal(searchTool.inputSchema.properties.pageNo.minimum, 0)
+    assert.equal(searchTool.inputSchema.properties.pageSize.minimum, 1)
+    assert.equal(searchTool.inputSchema.properties.pageSize.maximum, 200)
+    const auditTool = tools.find((tool) => tool.name === 'editor_audit_content')
+    assert.equal(auditTool.inputSchema.properties.cursor.type, 'integer')
+    assert.equal(auditTool.inputSchema.properties.cursor.minimum, 0)
+    assert.equal(auditTool.inputSchema.properties.limit.maximum, 100)
+    const selectSlideTool = tools.find((tool) => tool.name === 'editor_select_slide')
+    assert.equal(selectSlideTool.inputSchema.properties.saveBeforeSwitch.type, 'boolean')
+    assert.equal(selectSlideTool.inputSchema.properties.discardChanges.type, 'boolean')
+    assert.equal(selectSlideTool.inputSchema.allOf[0].not.properties.saveBeforeSwitch.const, true)
+    assert.equal(selectSlideTool.inputSchema.allOf[0].not.properties.discardChanges.const, true)
+    const planTool = tools.find((tool) => tool.name === 'editor_plan_question_lesson')
+    const renderTool = tools.find((tool) => tool.name === 'editor_render_questions_to_block')
+    assert.equal(planTool.inputSchema.properties.guids.maxItems, 50)
+    assert.equal(renderTool.inputSchema.properties.guids.maxItems, 30)
+    assert.ok(renderTool.inputSchema.properties.afterBlockId)
+    assert.ok(renderTool.inputSchema.properties.newBlockName)
+
+    const localManifest = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_get_book_manifest',
+        arguments: {}
+      })
+    )
+    assert.equal(localManifest.scope, 'current')
+    assert.equal(localManifest.detail, 'summary')
+    assert.equal(localManifest.pages.length, 1)
+    assert.equal(localManifest.pagination.pageSize, 1)
+
+    const bookManifest = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_get_book_manifest',
+        arguments: {
+          scope: 'book',
+          detail: 'deep',
+          include: { hierarchy: true, blocks: true, textPreview: true },
+          pageNo: 1,
+          pageSize: 10
+        }
+      })
+    )
+    assert.equal(bookManifest.scope, 'book')
+    assert.equal(bookManifest.detail, 'deep')
+    assert.equal(bookManifest.pagination.pageNo, 1)
+    assert.equal(bookManifest.pagination.pageSize, 10)
+
+    const localSearch = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_search_book_content',
+        arguments: { query: '一次函数' }
+      })
+    )
+    assert.equal(localSearch.scope, 'current')
+    assert.deepEqual(localSearch.targetKinds, ['element', 'tableCell', 'mindNode'])
+
+    const pagedSearch = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_search_book_content',
+        arguments: { query: '一次函数', scope: 'book', pageNo: 2, pageSize: 25 }
+      })
+    )
+    assert.equal(pagedSearch.pagination.pageNo, 2)
+    assert.equal(pagedSearch.pagination.pageSize, 25)
+
+    const invalidLocalPagination = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_search_book_content',
+        arguments: { query: '一次函数', scope: 'current', pageNo: 0 }
+      })
+    )
+    assert.match(invalidLocalPagination.error, /pageNo\/pageSize 仅用于 scope=book/)
+
+    for (const arguments_ of [
+      { query: '一次函数', scope: 'book', pageNo: -1 },
+      { query: '一次函数', scope: 'book', pageSize: 201 }
+    ]) {
+      const invalidPage = readToolError(
+        await client.request('tools/call', {
+          name: 'editor_search_book_content',
+          arguments: arguments_
+        })
+      )
+      assert.match(invalidPage.error, /pageNo 必须是非负整数|pageSize 必须是 1-200 的整数/)
+    }
+
+    const invalidTarget = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_search_book_content',
+        arguments: { query: '一次函数', targetKinds: ['question'] }
+      })
+    )
+    assert.match(invalidTarget.error, /targetKinds 不支持: question/)
+
+    const saved = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_save_verified',
+        arguments: { expectedSlideId: 'slide-1', expectedContentHash: 'mock-slide-hash-1' }
+      })
+    )
+    assert.equal(saved.scope, 'current')
+    assert.equal(saved.saved, true)
+    assert.equal(saved.savedScope, 'current')
+    assert.equal(saved.verified, true)
+
+    const versions = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_list_book_versions',
+        arguments: { pageNo: 0, pageSize: 10, versionPageNo: 0, versionPageSize: 5 }
+      })
+    )
+    assert.equal(versions.scope, 'current')
+    assert.equal(versions.versions[0].id, 'version-1')
+
+    const version = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_get_book_version',
+        arguments: { versionId: 'version-1' }
+      })
+    )
+    assert.equal(version.versionId, 'version-1')
+
+    const restorePreview = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_restore_book_version',
+        arguments: { versionId: 'version-1', validateOnly: true }
+      })
+    )
+    assert.equal(restorePreview.canRestore, true)
+    assert.equal(restorePreview.restored, undefined)
+
+    const missingRestoreSlide = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_restore_book_version',
+        arguments: { versionId: 'version-1', scope: 'book', validateOnly: true }
+      })
+    )
+    assert.match(missingRestoreSlide.error, /scope=book.*slideId/)
+
+    const plan = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_plan_question_lesson',
+        arguments: {
+          guids: [' question-a ', 'question-b'],
+          layout: 'practice',
+          styleReference: { templateId: 100, blockTemplateIds: [101], reuse: true }
+        }
+      })
+    )
+    assert.equal(plan.scope, 'current')
+    assert.equal(plan.detail, 'summary')
+    assert.equal(plan.layout, 'practice')
+    assert.deepEqual(plan.guids, ['question-a', 'question-b'])
+    assert.equal(plan.styleReference.reuse, true)
+
+    const rendered = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_render_questions_to_block',
+        arguments: {
+          plan,
+          blockId: 'block-1',
+          validateOnly: true,
+          expectedSlideId: 'slide-1'
+        }
+      })
+    )
+    assert.equal(rendered.mode, 'append')
+    assert.equal(rendered.valid, true)
+    assert.equal(rendered.rendered, false)
+
+    const tooManyRenderQuestions = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_render_questions_to_block',
+        arguments: {
+          guids: Array.from({ length: 31 }, (_, index) => `question-${index + 1}`),
+          blockId: 'block-1',
+          validateOnly: true
+        }
+      })
+    )
+    assert.match(tooManyRenderQuestions.error, /最多 30 项/)
+
+    const selectedLegacy = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_select_slide',
+        arguments: { slideId: 'slide-2' }
+      })
+    )
+    assert.equal(selectedLegacy.slideId, 'slide-2')
+    assert.equal(selectedLegacy.changed, true)
+    assert.equal(selectedLegacy.dirtyAction, 'none')
+
+    const selectedSafely = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_select_slide',
+        arguments: { slideId: 'slide-2', saveBeforeSwitch: true }
+      })
+    )
+    assert.equal(selectedSafely.slideId, 'slide-2')
+    assert.equal(selectedSafely.dirtyAction, 'saved')
+
+    const conflictingSwitch = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_select_slide',
+        arguments: {
+          slideId: 'slide-2',
+          saveBeforeSwitch: true,
+          discardChanges: true
+        }
+      })
+    )
+    assert.match(conflictingSwitch.error, /不能同时为 true/)
+
+    const localAudit = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_audit_content',
+        arguments: { checks: ['structure', 'text'] }
+      })
+    )
+    assert.equal(localAudit.scope, 'current')
+    assert.equal(localAudit.cursor, 0)
+    assert.equal(localAudit.limit, 1)
+    assert.equal(localAudit.scannedSlides, 1)
+    assert.equal(localAudit.totalSlides, 1)
+    assert.equal(localAudit.nextCursor, null)
+    assert.deepEqual(localAudit.sourceHashes.map((item) => item.slideId), ['slide-1'])
+
+    const wholeBookAudit = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_audit_content',
+        arguments: {
+          scope: 'book',
+          slideIds: ['slide-1', 'slide-2'],
+          cursor: 0,
+          limit: 1,
+          includeSuggestions: true
+        }
+      })
+    )
+    assert.equal(wholeBookAudit.scope, 'book')
+    assert.equal(wholeBookAudit.cursor, 0)
+    assert.equal(wholeBookAudit.limit, 1)
+    assert.equal(wholeBookAudit.scannedSlides, 1)
+    assert.equal(wholeBookAudit.totalSlides, 2)
+    assert.equal(wholeBookAudit.nextCursor, 1)
+    assert.deepEqual(wholeBookAudit.sourceHashes.map((item) => item.slideId), ['slide-1'])
+
+    const nextBookAudit = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_audit_content',
+        arguments: {
+          scope: 'book',
+          slideIds: ['slide-1', 'slide-2'],
+          cursor: wholeBookAudit.nextCursor,
+          limit: 1
+        }
+      })
+    )
+    assert.equal(nextBookAudit.cursor, 1)
+    assert.equal(nextBookAudit.nextCursor, null)
+    assert.deepEqual(nextBookAudit.sourceHashes.map((item) => item.slideId), ['slide-2'])
+
+    const invalidAuditCursor = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_audit_content',
+        arguments: { scope: 'book', cursor: 'next-1' }
+      })
+    )
+    assert.match(invalidAuditCursor.error, /cursor 必须是非负整数/)
+
+    const accidentalBookScan = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_audit_content',
+        arguments: { slideIds: ['slide-1', 'slide-2'] }
+      })
+    )
+    assert.match(accidentalBookScan.error, /slideIds\/cursor 仅用于 scope=book/)
+  } finally {
+    await client.close()
+  }
+})

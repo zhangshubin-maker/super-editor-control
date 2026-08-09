@@ -3,6 +3,7 @@
 // 运行：node index.js（可在环境变量 SUPER_EDITOR_MOCK=1 时 mock 测试）。
 import { createInterface } from 'node:readline'
 import * as driver from './driver.js'
+import { BOOK_AUTHORING_TOOLS, prepareBookAuthoringCall } from './bookAuthoring.js'
 
 const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.8.0' }
 
@@ -277,6 +278,7 @@ const TOOLS = [
       additionalProperties: false
     }
   },
+  ...BOOK_AUTHORING_TOOLS,
   {
     name: 'editor_search_templates',
     description: '搜索本书当前可用模板。kind=chapter 搜索样章模板（可直接用于新增目录），kind=block 搜索区块模板（可插入当前页）。返回模板 id、名称、封面和分类信息。',
@@ -816,11 +818,33 @@ const TOOLS = [
   },
   {
     name: 'editor_select_slide',
-    description: '切换到指定页面。',
+    description:
+      '安全切换到指定页面。当前页有未保存改动时，必须显式选择 saveBeforeSwitch 保存或 discardChanges 丢弃；仅传 slideId 时保持兼容。',
     inputSchema: {
       type: 'object',
-      properties: { slideId: { type: 'string' } },
+      properties: {
+        slideId: { type: 'string' },
+        saveBeforeSwitch: {
+          type: 'boolean',
+          description: '当前页有未保存改动时，先保存再切换'
+        },
+        discardChanges: {
+          type: 'boolean',
+          description: '当前页有未保存改动时，明确丢弃后再切换'
+        }
+      },
       required: ['slideId'],
+      allOf: [
+        {
+          not: {
+            properties: {
+              saveBeforeSwitch: { const: true },
+              discardChanges: { const: true }
+            },
+            required: ['saveBeforeSwitch', 'discardChanges']
+          }
+        }
+      ],
       additionalProperties: false
     }
   },
@@ -2647,6 +2671,19 @@ async function callTool(name, args) {
     case 'editor_jump_to_book':
       data = await driver.bridgeCall('jumpToBook', [args])
       break
+    case 'editor_get_book_manifest':
+    case 'editor_search_book_content':
+    case 'editor_save_verified':
+    case 'editor_list_book_versions':
+    case 'editor_get_book_version':
+    case 'editor_restore_book_version':
+    case 'editor_plan_question_lesson':
+    case 'editor_render_questions_to_block':
+    case 'editor_audit_content': {
+      const call = prepareBookAuthoringCall(name, args)
+      data = await driver.bridgeCall(call.method, call.args)
+      break
+    }
     case 'editor_search_templates':
       data = await driver.bridgeCall('searchTemplates', [args])
       break
@@ -2744,9 +2781,20 @@ async function callTool(name, args) {
     case 'editor_get_slide':
       data = await driver.bridgeCall('getSlide', [args.slideId])
       break
-    case 'editor_select_slide':
-      data = await driver.bridgeCall('selectSlide', [args.slideId])
+    case 'editor_select_slide': {
+      for (const field of ['saveBeforeSwitch', 'discardChanges']) {
+        if (hasOwn(args, field) && typeof args[field] !== 'boolean') {
+          throw new Error(`${field} 必须是布尔值`)
+        }
+      }
+      if (args.saveBeforeSwitch === true && args.discardChanges === true) {
+        throw new Error('saveBeforeSwitch 与 discardChanges 不能同时为 true')
+      }
+      const hasSafetyOption =
+        hasOwn(args, 'saveBeforeSwitch') || hasOwn(args, 'discardChanges')
+      data = await driver.bridgeCall('selectSlide', [hasSafetyOption ? args : args.slideId])
       break
+    }
     case 'editor_add_block':
       data = await driver.bridgeCall('addBlock', [args])
       break

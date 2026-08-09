@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Editor 质量验收"
+  short_description: "分层审计当前页或整书并验证当前页保存与持久版本恢复流程"
+  default_prompt: "使用 $super-editor-quality 按 micro/current/book 范围核对课件、验证当前页保存，并区分 Bridge 审计与专用工具或预览检查。"

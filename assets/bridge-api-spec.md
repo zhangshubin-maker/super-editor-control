@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v1.6）
+# window.__superEditor 桥接 API 契约（v1.7）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -71,6 +71,11 @@
 | `getUserInfo(payload?)` | `{ refresh? }` | 当前登录用户信息；优先读 Vuex，缺失或 refresh 时请求账号接口 |
 | `searchBooks(payload)` | `{ query?, bookType?=6, smartBookType?, subjectId?, gradeId?, period?, volume?, pageNo?, pageSize?, filters? }` | `{ items, pageNo, pageSize, total, paginator }`；调用 `getbooklist`，结果补充 `smart_book_type_name` |
 | `getBookInfo(payload)` | `{ bookId }` | `getbookinfo` 完整书本属性、学科、关联教材、分类和版本信息 |
+| `getBookManifest(payload?)` | `{ scope?: current/book, detail?: summary/standard/deep, slideId?, include?: { hierarchy?, blocks?, textPreview?, content? }, pageNo?, pageSize? }` | 目录层级、分页页面摘要、区块/元素/富文本统计、内容 hash 和 warnings；默认 current+summary，book 默认每页 40、上限 200 |
+| `searchBookContent(payload)` | `{ query, scope?: current/book, slideId?, pageNo? >= 0, pageSize?: 1..200, targetKinds?: [element/tableCell/mindNode], caseSensitive?, wholeWord?, useRegex?, limit? }` | 跨普通文本、表格单元格和思维导图节点的稳定范围命中；默认只搜当前目录，book 必须显式指定，并可按目录分页 |
+| `listBookVersions(payload?)` | `{ scope?: current/book, slideId?, pageNo?, pageSize?, versionPageNo?, versionPageSize? }` | current 时分页当前目录版本；book 时 page 分页目录、versionPage 分页每目录版本，返回 `pages/versions/pagination/warnings` |
+| `getBookVersion(payload)` | `{ versionId, scope?: current/book, slideId? }` | 以版本记录 `log_id` 读取完整区块、contentHash 和 blockCount |
+| `auditContent(payload?)` | `{ scope?: current/book, slideId?, slideIds?, checks?: [structure/text/resources/layout], cursor?: integer >= 0, limit?: 1..100, includeSuggestions? }` | 只读问题清单、稳定 issue id/sourceHash、严重级别统计和 nextCursor；默认仅当前目录，book 使用数值偏移分页扫描 |
 | `buildBookEditorUrl(payload)` | `{ bookId, includeToken?=false }` | 继承当前编辑器环境的目标书本 URL；主动删除旧 `ai_control` 参数 |
 | `jumpToBook(payload)` | `{ bookId, target?: url/current/new, includeToken? }` | `{ bookId, url, target, scheduled?/opened? }`；目标页由用户重新点击顶部按钮 |
 | `createBookFromSource(payload)` | `{ sourceBookId, copyMode?: light/full, name?, backgroundName?, smartBookType?, coverImgId?, coverImgUrl?, coverType?, includeToken? }` | 默认 light 只继承外部属性；full 复制目录和内容。返回 `{ sourceBookId, bookId, copyMode, includesCatalogAndContent, cloneMethod, book, editorUrl }` |
@@ -110,7 +115,7 @@
 
 | 方法 | 参数 | 返回 |
 |------|------|------|
-| `selectSlide(slideId)` | string | 无 |
+| `selectSlide(slideIdOrOptions)` | `slideId` 标量，或 `{ slideId, saveBeforeSwitch?, discardChanges? }`；两个安全选项不能同时为 true | `{ slideId, previousSlideId, changed, dirtyBefore, dirtyAction }`；dirty 时必须明确保存或丢弃，标量调用保持兼容 |
 | `addSlide(payload)` | `{ name?, parentId?, template_id?, type? }`（不传 template_id 时自动复用/创建空白样章模板） | `{ slideId }` |
 | `applyTemplate(payload)` | `{ kind: chapter/block, templateId, name?, parentId?, index?, afterBlockId? }` | 样章返回 `{ slideId }`；区块返回 `{ templateId, blockId }` |
 | `deleteSlide(slideId)` | string | 无 |
@@ -204,6 +209,8 @@
 | `undo()` / `redo()` | 无 | `{ disabled: true, reason }`（ai_control 已禁用，改用快照回滚） |
 | `canUndo()` / `canRedo()` | 无 | `{ disabled: true, reason }`（同左） |
 | `save()` | 无 | 无（复用编辑器保存流程） |
+| `saveVerified(payload?)` | `{ scope?: current/book, verify?=true, expectedSlideId?, expectedContentHash? }` | 始终只保存当前 dirty 页，返回 `savedScope=current/savedSlides`；scope=book 额外做分页整书摘要校验，不会逐页重写 |
+| `restoreBookVersion(payload)` | `{ versionId, scope?: current/book, slideId?, validateOnly?, expectedCurrentVersionId? }` | 恢复一个目录的持久版本；scope=book 必须明确 slideId，先 validateOnly 预检；实际恢复后当前目录会重载核对 |
 
 ### 快照 / 回滚（ai_control 专用，替代撤销/重做）
 
@@ -275,6 +282,8 @@
 | `getQuestions` / `editor_get_questions` | `{ guids, includeRaw?, includeDiagnostics?/returnEnvelope? }` | 详情含父子题与内容诊断；诊断信封为 `{ items, requestedGuids, uniqueGuids, foundGuids, missingGuids, duplicateGuids }`，不返回 `warnings` |
 | `validateQuestionSelection` / `editor_validate_question_selection` | `{ guids, targetModuleType, config? }` | `{ compatible, reasons, requestedGuids, selectedGuids, foundGuids, missingGuids, duplicateGuids, parentChildConflicts, items, targetModuleType }` |
 | `getQuestionSolutions` / `editor_get_question_solutions` | `{ guids, includeRaw? }` | 独立答案/解答/解析及缺失诊断 |
+| `planQuestionLesson` / `editor_plan_question_lesson` | `{ guids, scope?: current/book, detail?: summary/deep, slideId?, objective?, layout?: auto/practice/explain/assessment, styleReference? }` | 只处理显式 GUID 的只读编排计划；summary 读详情，deep 才预检 PC 题目组件/数据；不会隐式扫描整书 |
+| `renderQuestionsToBlock` / `editor_render_questions_to_block` | `{ plan? or guids?, blockId?, slideId?, afterBlockId?, newBlockName?, questionGap?, startTop?, mode?: append/replace, styleReference?, validateOnly?, expectedSlideId? }` | 复用原生题目组件排版到目标/新建区块；validateOnly 零写入，实际写入返回元素和位置且 `saved=false` |
 
 `editor_search_questions` 的显式筛选包括 `period/subjectId/gradeId/volume/difficulty/features/guidList`、
 答案/解析状态、`subModelIds/searchAreaTypes/sourceInfos/businessTypes/haveTag/tagNodeIds`。兼容
@@ -310,7 +319,8 @@ type 82 中 `timeMode=0` 是正计时、`timeMode=1` 是倒计时；倒计时必
 测评/竞速模式 `questionMode=2` 不允许正计时 `timeMode=0`，创建前必须经
 `validateQuestionSelection` 校验。
 
-当前版本不涵盖完整题目创建/编辑、OCR 或 AI 录题，也不把题目内容自动排版插入画布区块。
+当前版本不涵盖完整题目创建/编辑、OCR 或 AI 录题；题库现有题目的课件编排使用
+`planQuestionLesson` / `renderQuestionsToBlock`。
 
 ### 数字模块（v1.4：元素点击交互）
 
@@ -486,7 +496,7 @@ Bridge 1.6.0 的结构化富文本内容级方法统一接受且只接受一种�
 - URL 带 `token` 时，普通浏览器可沿用既有鉴权；RPC broker 不参与业务登录。
 
 ### 7.2 参数约定（重要）
-- `getSlide(slideId)` / `selectSlide(slideId)` / `deleteBlock(blockId)` 等方法的 id 参数一律是**标量**（string/number），传 `{ slideId }` 对象会触发服务端反序列化错误（`Cannot deserialize ... int from Object`）。
+- `getSlide(slideId)` / `deleteBlock(blockId)` 等方法的 id 参数仍使用**标量**（string/number）。`selectSlide` 是安全切页例外：兼容标量，也接受 `{ slideId, saveBeforeSwitch?, discardChanges? }`；只有需要明确处理 dirty 改动时才传对象。
 - `addBlock({ afterBlockId?, size? })` 返回 `{ blockId }`；`addElement({ blockId, type, payload })` 返回 `{ elementId }`；新增后可立刻 `getSlide` 校验。
 
 ### 7.3 文本元素样式模板（与产品风格一致）

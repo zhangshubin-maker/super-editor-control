@@ -614,6 +614,188 @@ function mockResult(method, args = []) {
         scheduled: arg.target === 'current',
         opened: arg.target === 'new'
       }
+    case 'getBookManifest':
+      return {
+        bookId: 'mock-book',
+        scope: arg.scope || 'current',
+        detail: arg.detail || 'summary',
+        currentSlideId: arg.slideId || 'slide-1',
+        pages: [
+          {
+            id: arg.slideId || 'slide-1',
+            name: '第 1 页',
+            blockCount: 1,
+            elementCount: 1,
+            textPreview: arg.include && arg.include.textPreview ? '示例文本' : undefined
+          }
+        ],
+        pagination: {
+          pageNo: arg.pageNo || 0,
+          pageSize: arg.pageSize || (arg.scope === 'book' ? 40 : 1),
+          totalSlides: 1,
+          returnedSlides: 1,
+          hasMore: false
+        },
+        stats: { loadedSlides: 1, blockCount: 1, elementCount: 1, textTargetCount: 1 },
+        contentHash: 'mock-book-hash-1',
+        warnings: []
+      }
+    case 'searchBookContent': {
+      const pageNo = arg.pageNo ?? 0
+      const pageSize = arg.pageSize ?? (arg.scope === 'book' ? 40 : 1)
+      const totalSlides = arg.scope === 'book' ? 100 : 1
+      return {
+        query: arg.query,
+        scope: arg.scope || 'current',
+        targetKinds: arg.targetKinds || ['element', 'tableCell', 'mindNode'],
+        searchedSlides: 1,
+        totalSlides,
+        searchedTargets: 1,
+        pagination: {
+          pageNo,
+          pageSize,
+          totalSlides,
+          returnedSlides: 1,
+          hasMore: (pageNo + 1) * pageSize < totalSlides,
+          nextPageNo: (pageNo + 1) * pageSize < totalSlides ? pageNo + 1 : null
+        },
+        items: [
+          {
+            slideId: arg.slideId || 'slide-1',
+            target: { kind: 'element', elementId: 'el-1' },
+            text: `包含 ${arg.query} 的示例文本`
+          }
+        ],
+        total: 1,
+        truncated: false,
+        warnings: []
+      }
+    }
+    case 'saveVerified':
+      return {
+        scope: arg.scope || 'current',
+        saved: true,
+        savedScope: 'current',
+        savedSlides: [arg.expectedSlideId || 'slide-1'],
+        verified: arg.verify !== false,
+        verifiedScope: arg.verify === false ? null : 'current',
+        slideId: arg.expectedSlideId || 'slide-1',
+        dirty: false,
+        contentHash: arg.expectedContentHash || 'mock-slide-hash-1',
+        ...(arg.scope === 'book'
+          ? {
+              bookManifestChecked: true,
+              bookManifestComplete: true,
+              bookManifestPageCount: 1,
+              bookCheckedSlides: 1,
+              bookContentHash: 'mock-book-hash-1'
+            }
+          : {})
+      }
+    case 'listBookVersions':
+      return {
+        scope: arg.scope || 'current',
+        slideId: arg.slideId || 'slide-1',
+        versions: [{ id: 'version-1', name: '版本 1', createdAt: '2026-01-01T00:00:00.000Z' }],
+        pages: [
+          {
+            slideId: arg.slideId || 'slide-1',
+            versions: [{ id: 'version-1', name: '版本 1' }]
+          }
+        ],
+        pageNo: arg.pageNo || 0,
+        pageSize: arg.pageSize || 20,
+        versionPageNo: arg.scope === 'book' ? arg.versionPageNo || 0 : arg.pageNo || 0,
+        versionPageSize: arg.scope === 'book' ? arg.versionPageSize || 20 : arg.pageSize || 20,
+        totalVersions: 1
+      }
+    case 'getBookVersion':
+      return {
+        scope: arg.scope || 'current',
+        slideId: arg.slideId || 'slide-1',
+        versionId: arg.versionId,
+        contentHash: 'mock-version-hash-1',
+        blocks: []
+      }
+    case 'restoreBookVersion':
+      return arg.validateOnly === true
+        ? {
+            scope: arg.scope || 'current',
+            slideId: arg.slideId || 'slide-1',
+            versionId: arg.versionId,
+            canRestore: true,
+            reasons: []
+          }
+        : {
+            scope: arg.scope || 'current',
+            slideId: arg.slideId || 'slide-1',
+            versionId: arg.versionId,
+            restored: true
+          }
+    case 'planQuestionLesson':
+      return {
+        scope: arg.scope || 'current',
+        detail: arg.detail || 'summary',
+        layout: arg.layout || 'auto',
+        guids: arg.guids || [],
+        styleReference: arg.styleReference || null,
+        sections: [{ role: 'practice', questionGuids: arg.guids || [] }]
+      }
+    case 'renderQuestionsToBlock':
+      return arg.validateOnly === true
+        ? {
+            slideId: arg.slideId || 'slide-1',
+            block: { requestedBlockId: arg.blockId || null, verified: true },
+            mode: arg.mode || 'append',
+            valid: true,
+            validateOnly: true,
+            rendered: false,
+            questionGuids: arg.guids || (arg.plan && arg.plan.guids) || []
+          }
+        : {
+            slideId: arg.slideId || 'slide-1',
+            blockId: arg.blockId || 'mock-question-block-1',
+            mode: arg.mode || 'append',
+            validateOnly: false,
+            rendered: true,
+            questionGuids: arg.guids || (arg.plan && arg.plan.guids) || []
+          }
+    case 'auditContent': {
+      const scope = arg.scope === 'book' ? 'book' : 'current'
+      const allSlideIds =
+        Array.isArray(arg.slideIds) && arg.slideIds.length
+          ? arg.slideIds.map((slideId) => String(slideId))
+          : [String(arg.slideId || 'slide-1')]
+      const cursor = scope === 'book' && Number.isInteger(arg.cursor) ? arg.cursor : 0
+      const limit =
+        scope === 'book' && Number.isInteger(arg.limit) ? Math.min(arg.limit, 100) : 1
+      const selectedIds = allSlideIds.slice(cursor, cursor + limit)
+      const slides = selectedIds.map((slideId) => ({
+        slideId,
+        sourceHash: `mock-audit-hash-${slideId}`,
+        issueCount: 0,
+        severityCounts: { error: 0, warning: 0, info: 0 },
+        issues: []
+      }))
+      return {
+        scope,
+        cursor,
+        limit,
+        scannedSlides: selectedIds.length,
+        totalSlides: allSlideIds.length,
+        nextCursor:
+          cursor + selectedIds.length < allSlideIds.length
+            ? cursor + selectedIds.length
+            : null,
+        issueCount: 0,
+        sourceHashes: slides.map((slide) => ({
+          slideId: slide.slideId,
+          hash: slide.sourceHash
+        })),
+        issues: [],
+        slides
+      }
+    }
     case 'searchTemplates':
       return [
         {
@@ -726,7 +908,27 @@ function mockResult(method, args = []) {
     }
     case 'groupElements':
       return { groupId: 'mock-group-' + Date.now() }
-    case 'selectSlide':
+    case 'selectSlide': {
+      const payload =
+        arg && typeof arg === 'object' && !Array.isArray(arg) ? arg : { slideId: arg }
+      const slideId = String(payload.slideId)
+      const previousSlideId = 'slide-1'
+      const changed = slideId !== previousSlideId
+      const dirtyAction = changed
+        ? payload.saveBeforeSwitch
+          ? 'saved'
+          : payload.discardChanges
+            ? 'discarded'
+            : 'none'
+        : 'none'
+      return {
+        slideId,
+        previousSlideId,
+        changed,
+        dirtyBefore: dirtyAction !== 'none',
+        dirtyAction
+      }
+    }
     case 'addSlide':
     case 'deleteSlide':
     case 'moveSlide':
