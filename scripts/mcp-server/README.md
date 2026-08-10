@@ -18,6 +18,7 @@
   复用；owner 退出后 follower 通常在约 2 秒内自动接管。
 - `editor_*` 工具第一次调用时自动选择并租用可用页面，无需 `pageUrl` / `httpUrl`。
 - 首次连接后会固定页面的 `windowId`；刷新或当前窗口切书时最多等待 30 秒，只认领同一浏览器窗口重新注册的新实例，其他已打开书本不会成为回退目标。
+- `editor_jump_to_book(target=current)` 会先检查 dirty 状态；需要保存时传 `saveBeforeSwitch=true`。导航后工具会等待目标 `bookId` 的新实例完成 `ping/getState`，成功返回 `ready=true`，不再把 `scheduled=true` 当成切书完成。
 - 新标签页/新窗口使用不同 `windowId`；如果检测到同一窗口身份对应多个页面，会以 `WINDOW_AMBIGUOUS` 安全失败，禁止猜测和串页。
 - `editor_status` 只报告可用页面；没有活动连接时不会占用租约。
 - 多任务会租用不同页面；工具执行期间续租，空闲 30 秒后可被其他任务使用。
@@ -53,6 +54,7 @@ node index.js
 | `editor_get_state` / `editor_get_slide` | 读取课件与页面 |
 | `editor_list_slides` / `editor_select_slide` | 列出并安全切换目录；dirty 时显式保存或丢弃改动 |
 | `editor_search_books` / `editor_get_book` / `editor_create_book` | 搜索、核对并创建书本 |
+| `editor_jump_to_book` | 生成书本 URL，或完整刷新当前窗口并等待目标书本加载就绪 |
 | `editor_get_book_manifest` / `editor_search_book_content` | 按当前目录或显式整书范围理解、搜索课件内容 |
 | `editor_save_verified` | 保存当前 dirty 页并回读校验；可显式执行整书摘要校验 |
 | `editor_list_book_versions` / `editor_get_book_version` / `editor_restore_book_version` | 查询、预检和恢复后端持久版本 |

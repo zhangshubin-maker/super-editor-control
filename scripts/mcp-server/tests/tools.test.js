@@ -82,7 +82,7 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
     const initialized = await client.request('initialize', {
       protocolVersion: '2025-06-18'
     })
-    assert.equal(initialized.result.serverInfo.version, '0.8.0')
+    assert.equal(initialized.result.serverInfo.version, '0.8.1')
 
     const listed = await client.request('tools/list')
     const names = listed.result.tools.map((tool) => tool.name)
@@ -180,6 +180,17 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
     assert.equal(jumpUrl.searchParams.has('ai_control'), false)
     assert.equal(jumpRouteParams.get('book_id'), '1820651')
     assert.equal(jumpRouteParams.get('ai_control'), '1')
+
+    const switched = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_jump_to_book',
+        arguments: { bookId: 1820651, target: 'current' }
+      })
+    )
+    assert.equal(switched.ready, true)
+    assert.equal(switched.bridgeReady, true)
+    assert.equal(switched.windowId, 'mock-window')
+    assert.equal(switched.currentSlideId, 'slide-1')
 
     const uploaded = readToolData(
       await client.request('tools/call', {
@@ -563,6 +574,32 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
       })
     )
     assert.match(existingExplanationIdError.error, /id 必须是正整数/)
+  } finally {
+    await client.close()
+  }
+})
+
+test('dirty 当前页切书必须显式保存，保存后返回目标书就绪', async () => {
+  const client = createMockClient({ SUPER_EDITOR_MOCK_DIRTY: '1' })
+  try {
+    await client.request('initialize', { protocolVersion: '2025-06-18' })
+
+    const rejected = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_jump_to_book',
+        arguments: { bookId: 1820651, target: 'current' }
+      })
+    )
+    assert.match(rejected.error, /saveBeforeSwitch: true/)
+
+    const switched = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_jump_to_book',
+        arguments: { bookId: 1820651, target: 'current', saveBeforeSwitch: true }
+      })
+    )
+    assert.equal(switched.ready, true)
+    assert.equal(switched.bridgeReady, true)
   } finally {
     await client.close()
   }

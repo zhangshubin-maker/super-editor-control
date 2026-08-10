@@ -15,6 +15,7 @@ const RPC_REQUEST_TIMEOUT_MS = 90000
 const DISCOVERY_TIMEOUT_MS = 3000
 const RECONNECT_DISCOVERY_TIMEOUT_MS = 30000
 const DISCOVERY_RETRY_MS = 100
+const BOOK_SWITCH_READY_TIMEOUT_MS = 30000
 const CONTROL_TIMEOUT_MS = 3000
 const CLIENT_ID = 'mcp-' + randomUUID()
 const LEASE_RENEW_INTERVAL_MS = 10000
@@ -192,7 +193,7 @@ async function releaseInstance(instanceId) {
   ).catch(() => {})
 }
 
-async function rpcRequest(method, args, targetInstance) {
+async function rpcRequest(method, args, targetInstance, requestTimeoutMs = RPC_REQUEST_TIMEOUT_MS) {
   const broker = await ensureLocalRpcBroker()
   let response
   const leaseTimer = setInterval(() => {
@@ -206,11 +207,11 @@ async function rpcRequest(method, args, targetInstance) {
       body: JSON.stringify({
         method,
         args: Array.isArray(args) ? args : [],
-        timeoutMs: RPC_REQUEST_TIMEOUT_MS,
+        timeoutMs: requestTimeoutMs,
         targetInstance: targetInstance || undefined,
         clientId: CLIENT_ID
       }),
-      signal: timeoutSignal(RPC_REQUEST_TIMEOUT_MS + CONTROL_TIMEOUT_MS)
+      signal: timeoutSignal(requestTimeoutMs + CONTROL_TIMEOUT_MS)
     })
   } catch (error) {
     active = null
@@ -422,6 +423,106 @@ export async function bridgeCall(method, args = []) {
     })
     return rpcRequest(method, args, nextConnection.instanceId)
   }
+}
+
+async function waitForBookReady(bookId, windowId) {
+  const deadline = Date.now() + BOOK_SWITCH_READY_TIMEOUT_MS
+  let lastError = null
+  let lastObservedBookId = null
+
+  while (Date.now() < deadline) {
+    try {
+      const remainingMs = Math.max(1, deadline - Date.now())
+      const connection = await ensureConnected({
+        windowId,
+        timeoutMs: Math.min(1000, remainingMs)
+      })
+      const page = await rpcRequest(
+        'ping',
+        [],
+        connection.instanceId,
+        Math.max(1000, deadline - Date.now())
+      )
+      connection.page = page
+      lastObservedBookId = page && page.bookId
+
+      if (String(lastObservedBookId) !== String(bookId)) {
+        await closeActive()
+      } else {
+        const state = await rpcRequest(
+          'getState',
+          [],
+          connection.instanceId,
+          Math.max(1000, deadline - Date.now())
+        )
+        const stateBookId = state && state.bookInfo && state.bookInfo.id
+        lastObservedBookId = stateBookId
+        if (String(stateBookId) === String(bookId)) {
+          return {
+            ready: true,
+            bridgeReady: true,
+            instanceId: connection.instanceId,
+            windowId: connection.windowId || windowId || null,
+            currentSlideId: state.currentSlideId === undefined ? null : state.currentSlideId
+          }
+        }
+        await closeActive()
+      }
+    } catch (error) {
+      lastError = error
+      await closeActive()
+    }
+
+    if (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, DISCOVERY_RETRY_MS))
+    }
+  }
+
+  const observed =
+    lastObservedBookId === undefined || lastObservedBookId === null
+      ? '未发现可读取的书本'
+      : `最后检测到书本 ${lastObservedBookId}`
+  const detail = lastError && lastError.message ? `；${lastError.message}` : ''
+  throw new RpcBridgeError(
+    'BOOK_SWITCH_TIMEOUT',
+    `等待目标书本 ${bookId} 加载就绪超时（${observed}${detail}）`
+  )
+}
+
+export async function jumpToBook(args = {}) {
+  const target = args.target || 'url'
+  if (MOCK) {
+    const result = await bridgeCall('jumpToBook', [args])
+    return target === 'current'
+      ? Object.assign(result, {
+          ready: true,
+          bridgeReady: true,
+          instanceId: 'mock-instance',
+          windowId: 'mock-window',
+          currentSlideId: 'slide-1',
+          durationMs: 0
+        })
+      : result
+  }
+
+  if (target !== 'current') return bridgeCall('jumpToBook', [args])
+
+  const startedAt = Date.now()
+  const connection = await ensureConnected()
+  const windowId = connection.windowId || pinnedWindowId
+  if (!windowId) {
+    throw new RpcBridgeError(
+      'WINDOW_ID_UNAVAILABLE',
+      '当前编辑器没有稳定 windowId，无法安全等待同一窗口完成书本切换'
+    )
+  }
+
+  // 导航命令不能使用 bridgeCall 的通用“实例失活后重试”策略，否则目标页加载后
+  // 可能再次执行 jumpToBook。只发送一次，再通过只读 ping/getState 收敛最终状态。
+  const result = await rpcRequest('jumpToBook', [args], connection.instanceId)
+  await closeActive()
+  const ready = await waitForBookReady(args.bookId, windowId)
+  return Object.assign({}, result, ready, { durationMs: Date.now() - startedAt })
 }
 
 export async function captureScreenshot(opts = {}) {

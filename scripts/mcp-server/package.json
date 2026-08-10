@@ -1,6 +1,6 @@
 {
   "name": "super-editor-control-mcp",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "Zero-dependency stdio MCP server and localhost RPC broker for controlling Super Editor pages in regular browsers.",
   "type": "module",

@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline'
 import * as driver from './driver.js'
 import { BOOK_AUTHORING_TOOLS, prepareBookAuthoringCall } from './bookAuthoring.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.8.0' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.8.1' }
 
 const ID_SCHEMA = { type: ['string', 'number'] }
 const ID_LIST_SCHEMA = {
@@ -251,13 +251,14 @@ const TOOLS = [
   },
   {
     name: 'editor_jump_to_book',
-    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 在当前页跳转；new 尝试打开新标签页。book_id、business_id、Scope、token 和 ai_control=1 必须且只能放在 #/content-editor 后的路由查询参数中，不得拼在 hash 前的外层查询串。跳转后用 editor_status 核对目标 bookId 和 bridgeReady。',
+    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 会完整刷新当前页，并等待同一 windowId 的目标书本和目录加载就绪后返回；new 尝试打开新标签页。book_id、business_id、Scope、token 和 ai_control=1 必须且只能放在 #/content-editor 后的路由查询参数中，不得拼在 hash 前的外层查询串。',
     inputSchema: {
       type: 'object',
       properties: {
         bookId: { type: ['string', 'number'], description: '目标书本 id' },
         target: { type: 'string', enum: ['url', 'current', 'new'], description: '默认 url' },
-        includeToken: { type: 'boolean', description: 'URL 是否包含登录 token，默认 false' }
+        includeToken: { type: 'boolean', description: 'URL 是否包含登录 token，默认 false' },
+        saveBeforeSwitch: { type: 'boolean', description: 'target=current 且当前页 dirty 时，是否先保存并回读验证；默认 false，dirty 时拒绝切换' }
       },
       required: ['bookId'],
       additionalProperties: false
@@ -3337,9 +3338,19 @@ async function callTool(name, args) {
       data = await driver.bridgeCall('createBookFromSource', [createArgs])
       break
     }
-    case 'editor_jump_to_book':
-      data = await driver.bridgeCall('jumpToBook', [args])
+    case 'editor_jump_to_book': {
+      if ((args.target || 'url') === 'current') {
+        const state = await driver.bridgeCall('getState')
+        if (state.dirty && args.saveBeforeSwitch !== true) {
+          throw new Error(
+            '当前页有未保存改动；切换书本前请传 saveBeforeSwitch: true，以保存并回读当前页'
+          )
+        }
+        if (state.dirty) await saveCurrentEditorStateVerified(state, '切换书本')
+      }
+      data = await driver.jumpToBook(args)
       break
+    }
     case 'editor_get_book_manifest':
     case 'editor_search_book_content':
     case 'editor_save_verified':

@@ -188,17 +188,108 @@ async function runBrowserPage(port, instance, signal, options = {}) {
       } else {
         value = { method: command.method }
       }
+      if (typeof options.onCommand === 'function') {
+        value = await options.onCommand(command, value)
+      }
       await fetch(baseUrl + '/result', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: command.id, instance, ok: true, value })
       })
+      if (typeof options.afterResult === 'function') {
+        await options.afterResult(command, value)
+      }
     } catch (error) {
       if (signal.aborted) return
       await wait(50)
     }
   }
 }
+
+test('MCP 当前窗口切书会等待同一 windowId 的目标书本真正就绪', { timeout: 20000 }, async () => {
+  const port = await getFreePort()
+  const client = createMcpClient(port)
+  const otherController = new AbortController()
+  const oldController = new AbortController()
+  const newController = new AbortController()
+  let oldPage = null
+  let newPage = null
+  let resolveJumpResult
+  const jumpResultPosted = new Promise((resolve) => {
+    resolveJumpResult = resolve
+  })
+  const otherPage = runBrowserPage(port, 'page-other-book', otherController.signal, {
+    windowId: 'window-other',
+    bookId: 'book-other'
+  })
+
+  try {
+    await initialize(client)
+    await waitForInstance(port, 'page-other-book')
+    oldPage = runBrowserPage(port, 'page-target-old', oldController.signal, {
+      windowId: 'window-target',
+      bookId: 'book-old',
+      onCommand(command, fallback) {
+        if (command.method !== 'jumpToBook') return fallback
+        return {
+          bookId: command.args[0].bookId,
+          target: 'current',
+          scheduled: true,
+          reloadScheduled: true
+        }
+      },
+      afterResult(command) {
+        if (command.method === 'jumpToBook') resolveJumpResult()
+      }
+    })
+    await waitForInstance(port, 'page-target-old')
+
+    const connected = readToolResult(
+      await client.call('tools/call', { name: 'editor_connect', arguments: {} })
+    )
+    assert.equal(connected.isError, false)
+    assert.equal(connected.data.windowId, 'window-target')
+
+    const switchPromise = client.call(
+      'tools/call',
+      {
+        name: 'editor_jump_to_book',
+        arguments: { bookId: 'book-new', target: 'current' }
+      },
+      15000
+    )
+    await jumpResultPosted
+    oldController.abort()
+    await oldPage
+    await fetch(`http://127.0.0.1:${port}/ai-control/rpc/unregister`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instance: 'page-target-old' })
+    })
+
+    newPage = runBrowserPage(port, 'page-target-new', newController.signal, {
+      windowId: 'window-target',
+      bookId: 'book-new'
+    })
+    await waitForInstance(port, 'page-target-new')
+
+    const switched = readToolResult(await switchPromise)
+    assert.equal(switched.isError, false)
+    assert.equal(switched.data.ready, true)
+    assert.equal(switched.data.bridgeReady, true)
+    assert.equal(switched.data.bookId, 'book-new')
+    assert.equal(switched.data.windowId, 'window-target')
+    assert.equal(switched.data.instanceId, 'page-target-new')
+    assert.equal(switched.data.currentSlideId, 'slide-book-new')
+    assert.equal(typeof switched.data.durationMs, 'number')
+  } finally {
+    otherController.abort()
+    oldController.abort()
+    newController.abort()
+    await Promise.all([otherPage, oldPage, newPage].filter(Boolean))
+    await client.close()
+  }
+})
 
 test('MCP 刷新重连保持原窗口绑定，不会认领其他书本页面', { timeout: 20000 }, async () => {
   const port = await getFreePort()

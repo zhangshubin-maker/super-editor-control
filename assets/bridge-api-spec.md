@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v1.8.1）
+# window.__superEditor 桥接 API 契约（v1.8.2）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -78,7 +78,7 @@
 | `getBookVersion(payload)` | `{ versionId, scope?: current/book, slideId? }` | 以版本记录 `log_id` 读取完整区块、contentHash 和 blockCount |
 | `auditContent(payload?)` | `{ scope?: current/book, slideId?, slideIds?, checks?: [structure/text/resources/layout], cursor?: integer >= 0, limit?: 1..100, includeSuggestions? }` | 只读问题清单、稳定 issue id/sourceHash、严重级别统计和 nextCursor；默认仅当前目录，book 使用数值偏移分页扫描 |
 | `buildBookEditorUrl(payload)` | `{ bookId, includeToken?=false }` | 继承当前编辑器环境的目标书本 URL；`book_id/business_id/Scope/token/ai_control` 只写入 `#/content-editor` 后的路由查询串，删除外层重复参数和旧 `catalog_id` |
-| `jumpToBook(payload)` | `{ bookId, target?: url/current/new, includeToken? }` | `{ bookId, url, target, scheduled?/opened? }`；目标页加载后以 `editor_status` 的 `bookId/bridgeReady` 为成功依据 |
+| `jumpToBook(payload)` | `{ bookId, target?: url/current/new, includeToken? }` | `{ bookId, url, target, scheduled?/opened?, reloadScheduled? }`；current 先替换目标 URL 再安排完整刷新。Bridge 只负责单次导航，MCP `editor_jump_to_book` 负责等待同一 `windowId` 的目标书本和目录加载就绪 |
 | `createBookFromSource(payload)` | `{ sourceBookId, copyMode?: light/full, name?, backgroundName?, smartBookType?, coverImgId?, coverImgUrl?, coverType?, includeToken? }` | 默认 light 只继承外部属性；full 复制目录和内容。返回 `{ sourceBookId, bookId, copyMode, includesCatalogAndContent, cloneMethod, book, editorUrl }` |
 | `searchTemplates(payload)` | `{ kind?: chapter/block, query?, pageNo?, pageSize?, classifyId?, parentId?, timeSort? }` | 本书可用模板 `[{ id, name, type, kind, parentId, classifyId, cover, updatedAt }]` |
 | `listTemplates(payload)` | 同 `searchTemplates` | `searchTemplates` 兼容别名 |
