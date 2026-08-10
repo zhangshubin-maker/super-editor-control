@@ -1,4 +1,4 @@
-# window.__superEditor 桥接 API 契约（v1.8）
+# window.__superEditor 桥接 API 契约（v1.8.1）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
@@ -70,7 +70,7 @@
 | `getState()` | 无 | 见上 |
 | `listSlides()` | 无 | `[{ id, name, pageId }]` |
 | `getUserInfo(payload?)` | `{ refresh? }` | 当前登录用户信息；优先读 Vuex，缺失或 refresh 时请求账号接口 |
-| `searchBooks(payload)` | `{ query?, bookType?=6, smartBookType?, subjectId?, gradeId?, period?, volume?, pageNo?, pageSize?, filters? }` | `{ items, pageNo, pageSize, total, paginator }`；调用 `getbooklist`，结果补充 `smart_book_type_name` |
+| `searchBooks(payload)` | `{ query?, bookType?=6, smartBookType?, subjectId?, gradeId?, period?, volume?, pageNo?, pageSize?, filters? }` | `smartBookType` 兼容 1..4 数值、数字字符串和中文交互类型名；返回 `{ items, pageNo, pageSize, total, paginator }`，结果补充 `smart_book_type_name` |
 | `getBookInfo(payload)` | `{ bookId }` | `getbookinfo` 完整书本属性、学科、关联教材、分类和版本信息 |
 | `getBookManifest(payload?)` | `{ scope?: current/book, detail?: summary/standard/deep, slideId?, include?: { hierarchy?, blocks?, textPreview?, content? }, pageNo?, pageSize? }` | 目录层级、分页页面摘要、区块/元素/富文本统计、内容 hash 和 warnings；默认 current+summary，book 默认每页 40、上限 200 |
 | `searchBookContent(payload)` | `{ query, scope?: current/book, slideId?, pageNo? >= 0, pageSize?: 1..200, targetKinds?: [element/tableCell/mindNode], caseSensitive?, wholeWord?, useRegex?, limit? }` | 跨普通文本、表格单元格和思维导图节点的稳定范围命中；默认只搜当前目录，book 必须显式指定，并可按目录分页 |
