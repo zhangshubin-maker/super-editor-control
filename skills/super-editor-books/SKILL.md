@@ -67,9 +67,18 @@ description: 超媒编辑器（super-editor-control 插件）的书本管理技�
 - `new`：尝试打开新标签页；浏览器阻止弹窗时使用返回的 URL 手动打开。
 - `current`：当前编辑器页延迟跳转。
 
-跳转会让原页面 RPC 实例失效。目标页加载完成后，请用户重新点击顶部“AI 控制”，插件会自动
-发现；必要时调用 `editor_connect` 重新选择，再用 `editor_status` 验证 `bridgeReady=true`。仅在跨会话打开确实需要时传
-`includeToken: true`；同一页面或同源新标签通常不必把 token 放进 URL。
+**URL 不变式**：`book_id`、`business_id`、`Scope`、`token` 和 `ai_control=1` 都属于
+`#/content-editor` 路由，必须放在 hash 路由后的查询串中；禁止放在 hash 前的外层 URL
+查询串，也禁止内外各保留一份。正确形式：
+
+```text
+https://host/hyper-media-editor/#/content-editor?business_id=...&Scope=...&book_id=1820651&winOpen=1&ai_control=1
+```
+
+跳转到另一本书时必须删除旧 `catalog_id`，避免新书携带旧书目录。跳转会让原页面 RPC
+实例失效；目标页加载后用 `editor_status` 验证返回的 `bookId` 等于目标书且
+`bridgeReady=true`，不得把 `scheduled: true` 或 URL 字符串本身当成跳转成功。仅在跨会话打开确实需要时传
+`includeToken: true`。
 
 ## 推荐完整流程
 

@@ -35,7 +35,7 @@ window.__SUPER_EDITOR_RPC_URL || 'http://127.0.0.1:8765/ai-control'
 2. 若设置 CSP，`connect-src` 包含 `http://127.0.0.1:8765`。
 3. Chrome / Edge 首次询问本地网络访问权限时，用户选择允许。
 4. 页面位于跨域 iframe 时，宿主页向 iframe 委派 `loopback-network` 权限。
-5. 不再通过 `ai_control=1` URL 参数开启；唯一入口是顶部按钮。
+5. 用户首次开启 AI 控制仍以顶部按钮为准；已开启 AI 控制后的书本跳转可以继承 `ai_control=1`，但该参数必须放在 `#/content-editor` 后的路由查询串中，禁止拼在 hash 前的外层查询串。
 
 `window.__SUPER_EDITOR_RPC_URL` 只用于开发或改变 broker 端口。正式默认无需注入。
 

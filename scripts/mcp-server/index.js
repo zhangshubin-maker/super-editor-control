@@ -251,7 +251,7 @@ const TOOLS = [
   },
   {
     name: 'editor_jump_to_book',
-    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 在当前页跳转；new 尝试打开新标签页。跳转后的页面需由用户点击顶部“AI 控制”按钮，插件随后会自动连接。',
+    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 在当前页跳转；new 尝试打开新标签页。book_id、business_id、Scope、token 和 ai_control=1 必须且只能放在 #/content-editor 后的路由查询参数中，不得拼在 hash 前的外层查询串。跳转后用 editor_status 核对目标 bookId 和 bridgeReady。',
     inputSchema: {
       type: 'object',
       properties: {

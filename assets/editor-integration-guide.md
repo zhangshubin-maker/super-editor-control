@@ -121,7 +121,7 @@ async function mutate(action, payload) {
 ## 3. 联调步骤
 
 1. `npm run dev` 启动，浏览器登录（确保 `sessionStorage.business_id` 与 token 存在）。
-2. 在普通 Chrome / Edge 中打开 `/content-editor?book_id=<你的课件ID>`，点击顶部“AI 控制”；首次出现本地网络访问提示时选择允许。
+2. 在普通 Chrome / Edge 中打开 `/#/content-editor?book_id=<你的课件ID>`，点击顶部“AI 控制”；`book_id` 和后续 `ai_control=1` 都必须位于 hash 路由查询串中。首次出现本地网络访问提示时选择允许。
 3. Console 验证：`window.__superEditor && await window.__superEditor.ping()`。
 4. 用本插件 MCP（直接调用 `editor_get_state`，或先调用无参数 `editor_connect`）执行一次元素修改，确认画布实时变化。
 5. 任务开始/关键节点先 `checkpoint({ label })` 打快照；修改后 `editor_save`，刷新页面确认已持久化；若结果不符合预期 `rollback({ checkpointId })` 恢复，任务成功 `clearCheckpoints()`。

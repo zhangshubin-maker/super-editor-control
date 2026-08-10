@@ -610,13 +610,13 @@ function mockResult(method, args = []) {
             smart_book_type: arg.smartBookType || 3
           }
         },
-        editorUrl: `https://mock.example.com/content-editor?book_id=${bookId}`
+        editorUrl: `https://mock.example.com/#/content-editor?book_id=${bookId}&ai_control=1`
       }
     }
     case 'jumpToBook':
       return {
         bookId: arg.bookId,
-        url: `https://mock.example.com/content-editor?book_id=${arg.bookId}`,
+        url: `https://mock.example.com/#/content-editor?book_id=${arg.bookId}&ai_control=1`,
         target: arg.target || 'url',
         scheduled: arg.target === 'current',
         opened: arg.target === 'new'

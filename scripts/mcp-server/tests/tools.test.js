@@ -168,6 +168,19 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
       /uniqueGuids.*duplicateGuids/
     )
 
+    const jumped = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_jump_to_book',
+        arguments: { bookId: 1820651, target: 'url' }
+      })
+    )
+    const jumpUrl = new URL(jumped.url)
+    const jumpRouteParams = new URLSearchParams(jumpUrl.hash.split('?')[1])
+    assert.equal(jumpUrl.searchParams.has('book_id'), false)
+    assert.equal(jumpUrl.searchParams.has('ai_control'), false)
+    assert.equal(jumpRouteParams.get('book_id'), '1820651')
+    assert.equal(jumpRouteParams.get('ai_control'), '1')
+
     const uploaded = readToolData(
       await client.request('tools/call', {
         name: 'editor_upload_file',
@@ -931,6 +944,10 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
     assert.match(
       byName.get('editor_jump_to_book').description,
       /^\[导航\|改变编辑器上下文\|不写库\]/
+    )
+    assert.match(
+      byName.get('editor_jump_to_book').description,
+      /ai_control=1.*#\/content-editor.*不得拼在 hash 前/
     )
     assert.match(byName.get('editor_checkpoint').description, /^\[会话内快照\|不写库\]/)
     assert.match(byName.get('editor_clear_checkpoints').description, /^\[会话内快照\|不写库\]/)
