@@ -4071,10 +4071,17 @@ function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
   const forceExitTimer = setTimeout(() => process.exit(1), 5000)
-  driver.shutdown().finally(() => {
-    clearTimeout(forceExitTimer)
-    process.exit(0)
-  })
+  driver.shutdown().then(
+    () => {
+      clearTimeout(forceExitTimer)
+      process.exitCode = 0
+    },
+    (error) => {
+      clearTimeout(forceExitTimer)
+      console.error(error)
+      process.exitCode = 1
+    }
+  )
 }
 
 rl.on('close', shutdown)

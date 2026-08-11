@@ -55,6 +55,7 @@ $serverJson = $serverPath.Replace('\', '/')
 $pluginRootJson = $pluginRoot.Replace('\', '/')
 $mcp = @{
   'super-editor' = @{
+    enabled             = $true
     type                = 'stdio'
     command             = $nodeJson
     args                = @($serverJson)

@@ -1,5 +1,6 @@
 {
   "super-editor": {
+    "enabled": true,
     "command": "powershell.exe",
     "args": [
       "-NoLogo",

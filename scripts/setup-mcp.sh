@@ -57,6 +57,7 @@ const fs = require('node:fs')
 
 const config = {
   'super-editor': {
+    enabled: true,
     type: 'stdio',
     command: process.execPath,
     args: [process.env.SUPER_EDITOR_SERVER_PATH],

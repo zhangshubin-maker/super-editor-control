@@ -247,7 +247,8 @@ codex plugin add super-editor-control@super-editor-control
 
 ## 组成
 
-- `.mcp.json`：启动插件自带的 stdio MCP。文件本身保持官方支持的直接 server map；
+- `.mcp.json`：启动插件自带的 stdio MCP，并显式设置 `enabled: true` 作为安装后的默认策略。
+  用户或管理员仍可在 Codex 配置中覆盖该策略。文件本身保持官方支持的直接 server map；
   `.codex-plugin/plugin.json` 再通过 `mcpServers: "./.mcp.json"` 引用它，不要在文件内重复包
   `mcpServers`。
 - `scripts/mcp-server/start.ps1`：Windows 自动定位 Codex 捆绑或系统 Node 运行时。
