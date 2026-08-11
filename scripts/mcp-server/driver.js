@@ -176,11 +176,12 @@ async function postBrokerControl(pathname, body, retryAfterRecovery = true) {
   return response.json()
 }
 
-async function claimInstance(preferredInstance, preferredWindowId) {
+async function claimInstance(preferredInstance, preferredWindowId, excludedInstance) {
   return postBrokerControl('/claim', {
     clientId: CLIENT_ID,
     preferredInstance: preferredInstance || undefined,
-    preferredWindowId: preferredWindowId || undefined
+    preferredWindowId: preferredWindowId || undefined,
+    excludedInstance: excludedInstance || undefined
   })
 }
 
@@ -249,7 +250,9 @@ async function rpcRequest(method, args, targetInstance, requestTimeoutMs = RPC_R
 }
 
 async function ensureConnected(options = {}) {
-  if (active && active.instanceId) return active
+  const excludedInstanceId = options.excludedInstanceId || null
+  if (active && active.instanceId && active.instanceId !== excludedInstanceId) return active
+  if (active && active.instanceId === excludedInstanceId) await closeActive()
   if (connectPromise) return connectPromise
   connectPromise = (async () => {
     const preferredWindowId =
@@ -263,7 +266,7 @@ async function ensureConnected(options = {}) {
     const deadline = Date.now() + timeoutMs
     let claimed
     do {
-      claimed = await claimInstance(null, preferredWindowId)
+      claimed = await claimInstance(null, preferredWindowId, excludedInstanceId)
       if (claimed.ok) break
       const waitingForTargetWindow =
         preferredWindowId &&
@@ -425,18 +428,122 @@ export async function bridgeCall(method, args = []) {
   }
 }
 
-async function waitForBookReady(bookId, windowId) {
+function readBookId(value) {
+  if (!value || typeof value !== 'object') return null
+  if (value.bookId !== undefined && value.bookId !== null) return value.bookId
+  return value.bookInfo && value.bookInfo.id !== undefined ? value.bookInfo.id : null
+}
+
+function isBookSwitching(value) {
+  return !!(
+    value &&
+    typeof value === 'object' &&
+    (value.bookSwitching === true || value.switchInProgress === true)
+  )
+}
+
+function contextEpochReached(observed, expected) {
+  if (expected === undefined || expected === null) return true
+  if (observed === undefined || observed === null) return false
+  const observedNumber = Number(observed)
+  const expectedNumber = Number(expected)
+  if (Number.isFinite(observedNumber) && Number.isFinite(expectedNumber)) {
+    return observedNumber >= expectedNumber
+  }
+  return String(observed) === String(expected)
+}
+
+function observedContextEpoch(page, state) {
+  const stateEpoch = state && state.contextEpoch
+  if (stateEpoch !== undefined && stateEpoch !== null) return stateEpoch
+  return page && page.contextEpoch !== undefined ? page.contextEpoch : null
+}
+
+function isExpectedContextReady(page, state, minimumContextEpoch) {
+  if (minimumContextEpoch === undefined || minimumContextEpoch === null) return true
+  const observedEpochs = [page && page.contextEpoch, state && state.contextEpoch].filter(
+    (value) => value !== undefined && value !== null
+  )
+  return (
+    observedEpochs.length > 0 &&
+    observedEpochs.every((epoch) => contextEpochReached(epoch, minimumContextEpoch))
+  )
+}
+
+function readContentReadiness(page, state) {
+  const readBoolean = (key) => {
+    if (state && typeof state[key] === 'boolean') return state[key]
+    if (page && typeof page[key] === 'boolean') return page[key]
+    return undefined
+  }
+  return {
+    contentReady: readBoolean('contentReady'),
+    currentSlidePlaceholder: readBoolean('currentSlidePlaceholder'),
+    emptyBook: readBoolean('emptyBook')
+  }
+}
+
+function isExpectedContentReady(state, readiness, required) {
+  if (!required) return true
+  if (readiness.emptyBook === true || readiness.currentSlidePlaceholder === true) {
+    return true
+  }
+  const currentSlideId = state && state.currentSlideId
+  const hasCurrentSlide =
+    currentSlideId !== undefined &&
+    currentSlideId !== null &&
+    String(currentSlideId).trim() !== ''
+  return hasCurrentSlide && readiness.contentReady === true
+}
+
+function contentReadinessResult(readiness) {
+  const result = {}
+  for (const key of ['contentReady', 'currentSlidePlaceholder', 'emptyBook']) {
+    if (typeof readiness[key] === 'boolean') result[key] = readiness[key]
+  }
+  return result
+}
+
+async function waitForBookReady(
+  bookId,
+  windowId,
+  {
+    initialInstanceId = null,
+    minimumContextEpoch = null,
+    requireContentReady = false,
+    requireNewInstance = false
+  } = {}
+) {
   const deadline = Date.now() + BOOK_SWITCH_READY_TIMEOUT_MS
   let lastError = null
   let lastObservedBookId = null
+  let lastObservedContextEpoch = null
+  let lastObservedInstanceId = initialInstanceId
+  let lastObservedSwitching = null
+  let lastObservedReadiness = {
+    contentReady: undefined,
+    currentSlidePlaceholder: undefined,
+    emptyBook: undefined
+  }
 
   while (Date.now() < deadline) {
     try {
       const remainingMs = Math.max(1, deadline - Date.now())
       const connection = await ensureConnected({
         windowId,
-        timeoutMs: Math.min(1000, remainingMs)
+        timeoutMs: Math.min(1000, remainingMs),
+        excludedInstanceId: requireNewInstance ? initialInstanceId : null
       })
+      if (
+        requireNewInstance &&
+        initialInstanceId &&
+        connection.instanceId === initialInstanceId
+      ) {
+        lastObservedInstanceId = connection.instanceId
+        await closeActive()
+        await new Promise((resolve) => setTimeout(resolve, DISCOVERY_RETRY_MS))
+        continue
+      }
       const page = await rpcRequest(
         'ping',
         [],
@@ -444,33 +551,56 @@ async function waitForBookReady(bookId, windowId) {
         Math.max(1000, deadline - Date.now())
       )
       connection.page = page
-      lastObservedBookId = page && page.bookId
+      lastObservedInstanceId = connection.instanceId
+      lastObservedBookId = readBookId(page)
+      lastObservedContextEpoch = page && page.contextEpoch
+      lastObservedSwitching = isBookSwitching(page)
 
-      if (String(lastObservedBookId) !== String(bookId)) {
-        await closeActive()
-      } else {
+      if (String(lastObservedBookId) === String(bookId) && !lastObservedSwitching) {
         const state = await rpcRequest(
           'getState',
           [],
           connection.instanceId,
           Math.max(1000, deadline - Date.now())
         )
-        const stateBookId = state && state.bookInfo && state.bookInfo.id
+        const stateBookId = readBookId(state)
         lastObservedBookId = stateBookId
-        if (String(stateBookId) === String(bookId)) {
-          return {
-            ready: true,
-            bridgeReady: true,
-            instanceId: connection.instanceId,
-            windowId: connection.windowId || windowId || null,
-            currentSlideId: state.currentSlideId === undefined ? null : state.currentSlideId
-          }
+        lastObservedContextEpoch = observedContextEpoch(page, state)
+        lastObservedSwitching = isBookSwitching(page) || isBookSwitching(state)
+        lastObservedReadiness = readContentReadiness(page, state)
+        if (
+          String(stateBookId) === String(bookId) &&
+          !lastObservedSwitching &&
+          isExpectedContextReady(page, state, minimumContextEpoch) &&
+          isExpectedContentReady(state, lastObservedReadiness, requireContentReady)
+        ) {
+          return Object.assign(
+            {
+              ready: true,
+              bridgeReady: true,
+              instanceId: connection.instanceId,
+              windowId: connection.windowId || windowId || null,
+              currentSlideId: state.currentSlideId === undefined ? null : state.currentSlideId,
+              instancePreserved:
+                !!initialInstanceId && connection.instanceId === initialInstanceId
+            },
+            lastObservedContextEpoch === undefined || lastObservedContextEpoch === null
+              ? {}
+              : { contextEpoch: lastObservedContextEpoch },
+            contentReadinessResult(lastObservedReadiness)
+          )
         }
-        await closeActive()
       }
     } catch (error) {
       lastError = error
-      await closeActive()
+      // 热切书期间优先保留当前实例和租约。只有实例确实失活（旧 Bridge 刷新路径）
+      // 或 rpcRequest 已清空 active 时，才释放并按原 windowId 等待新实例。
+      if (
+        !active ||
+        ['INSTANCE_STALE', 'INSTANCE_UNREGISTERED'].includes(error && error.code)
+      ) {
+        await closeActive()
+      }
     }
 
     if (Date.now() < deadline) {
@@ -483,9 +613,23 @@ async function waitForBookReady(bookId, windowId) {
       ? '未发现可读取的书本'
       : `最后检测到书本 ${lastObservedBookId}`
   const detail = lastError && lastError.message ? `；${lastError.message}` : ''
+  const epochDetail =
+    minimumContextEpoch === undefined || minimumContextEpoch === null
+      ? ''
+      : `；上下文版本 ${lastObservedContextEpoch ?? '未上报'}/${minimumContextEpoch}`
+  const switchingDetail = lastObservedSwitching ? '；书本仍在切换中' : ''
+  const contentDetail = requireContentReady
+    ? `；内容就绪=${lastObservedReadiness.contentReady ?? '未上报'}，占位目录=${lastObservedReadiness.currentSlidePlaceholder ?? '未上报'}，空书=${lastObservedReadiness.emptyBook ?? '未上报'}`
+    : ''
+  const instanceDetail = lastObservedInstanceId ? `；实例 ${lastObservedInstanceId}` : ''
+  const newInstanceDetail =
+    requireNewInstance &&
+    (!lastObservedInstanceId || lastObservedInstanceId === initialInstanceId)
+      ? '；尚未发现刷新后的新实例'
+      : ''
   throw new RpcBridgeError(
     'BOOK_SWITCH_TIMEOUT',
-    `等待目标书本 ${bookId} 加载就绪超时（${observed}${detail}）`
+    `等待目标书本 ${bookId} 加载就绪超时（${observed}${epochDetail}${switchingDetail}${contentDetail}${instanceDetail}${newInstanceDetail}${detail}）`
   )
 }
 
@@ -500,6 +644,10 @@ export async function jumpToBook(args = {}) {
           instanceId: 'mock-instance',
           windowId: 'mock-window',
           currentSlideId: 'slide-1',
+          contentReady: true,
+          currentSlidePlaceholder: false,
+          emptyBook: false,
+          instancePreserved: true,
           durationMs: 0
         })
       : result
@@ -520,9 +668,33 @@ export async function jumpToBook(args = {}) {
   // 导航命令不能使用 bridgeCall 的通用“实例失活后重试”策略，否则目标页加载后
   // 可能再次执行 jumpToBook。只发送一次，再通过只读 ping/getState 收敛最终状态。
   const result = await rpcRequest('jumpToBook', [args], connection.instanceId)
-  await closeActive()
-  const ready = await waitForBookReady(args.bookId, windowId)
-  return Object.assign({}, result, ready, { durationMs: Date.now() - startedAt })
+  const hotSwitchConfirmed = !!(result && result.hotSwitched === true)
+  const reloadExpected = !!(
+    result &&
+    !hotSwitchConfirmed &&
+    (result.reloadScheduled === true || result.scheduled === true)
+  )
+  // v1.8.2 会明确安排完整刷新，保留原有释放/重连路径；v1.9.0 热切成功不释放，
+  // 继续在同一个 instanceId 上等待上下文版本收敛。
+  if (reloadExpected) await closeActive()
+  const ready = await waitForBookReady(args.bookId, windowId, {
+    initialInstanceId: connection.instanceId,
+    minimumContextEpoch: hotSwitchConfirmed ? result.contextEpoch : null,
+    requireContentReady: hotSwitchConfirmed,
+    requireNewInstance: reloadExpected
+  })
+  const navigationResult = { ...result }
+  if (!hotSwitchConfirmed) {
+    // 刷新结果里的 epoch/内容状态属于旧页面；只允许 waitForBookReady 观测到的
+    // 新实例状态进入最终返回，避免把旧上下文伪装成新书就绪状态。
+    delete navigationResult.contextEpoch
+    delete navigationResult.contentReady
+    delete navigationResult.currentSlidePlaceholder
+    delete navigationResult.emptyBook
+  }
+  return Object.assign({}, navigationResult, ready, {
+    durationMs: Date.now() - startedAt
+  })
 }
 
 export async function captureScreenshot(opts = {}) {
@@ -656,7 +828,14 @@ function mockResult(method, args = []) {
   const arg = (args && args[0]) || {}
   switch (method) {
     case 'ping':
-      return { version: '1.6.0', editorType: 'content-editor', bookId: 'mock-book', mode: 'ai-control' }
+      return {
+        version: '1.9.0',
+        editorType: 'content-editor',
+        bookId: 'mock-book',
+        mode: 'ai-control',
+        contextEpoch: 1,
+        bookSwitching: false
+      }
     case 'getMockCallLog':
       return mockBridgeCalls
     case 'getUserInfo':
@@ -719,7 +898,10 @@ function mockResult(method, args = []) {
         bookId: arg.bookId,
         url: `https://mock.example.com/#/content-editor?book_id=${arg.bookId}&ai_control=1`,
         target: arg.target || 'url',
-        scheduled: arg.target === 'current',
+        scheduled: false,
+        hotSwitched: arg.target === 'current',
+        reloadScheduled: false,
+        contextEpoch: arg.target === 'current' ? 2 : undefined,
         opened: arg.target === 'new'
       }
     case 'getBookManifest':
@@ -968,7 +1150,13 @@ function mockResult(method, args = []) {
       }
     case 'getState':
       return {
+        bookId: 'mock-book',
         bookInfo: { id: 'mock-book', name: '示例课件（MOCK）' },
+        contextEpoch: 1,
+        bookSwitching: false,
+        contentReady: true,
+        currentSlidePlaceholder: false,
+        emptyBook: false,
         slides: [
           { id: 'slide-1', name: '第 1 页', pageId: null },
           { id: 'slide-2', name: '第 2 页', pageId: null }

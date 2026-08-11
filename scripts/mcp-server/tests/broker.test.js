@@ -592,3 +592,42 @@ test('刷新重连只认领原窗口，其他书本窗口不会成为回退目�
     await broker.stop()
   }
 })
+
+test('刷新重连可排除仍存活的旧实例并认领同窗口新实例', async () => {
+  const { broker, baseUrl } = await createBroker()
+  const controllers = []
+  const registrations = []
+  const register = (instance, windowId) => {
+    const controller = new AbortController()
+    controllers.push(controller)
+    const query =
+      '?instance=' + encodeURIComponent(instance) + '&windowId=' + encodeURIComponent(windowId)
+    registrations.push(
+      fetch(baseUrl + '/poll' + query, { signal: controller.signal }).catch(() => null)
+    )
+  }
+  try {
+    register('page-refresh-old-live', 'window-refresh-overlap')
+    register('page-refresh-new', 'window-refresh-overlap')
+    await waitForInstance(baseUrl, 'page-refresh-old-live')
+    await waitForInstance(baseUrl, 'page-refresh-new')
+
+    const ambiguous = await postJson(baseUrl, '/claim', {
+      clientId: 'client-refresh-overlap',
+      preferredWindowId: 'window-refresh-overlap'
+    })
+    assert.equal(ambiguous.body.errorCode, 'WINDOW_AMBIGUOUS')
+
+    const reconnected = await postJson(baseUrl, '/claim', {
+      clientId: 'client-refresh-overlap',
+      preferredWindowId: 'window-refresh-overlap',
+      excludedInstance: 'page-refresh-old-live'
+    })
+    assert.equal(reconnected.body.instance, 'page-refresh-new')
+    assert.equal(reconnected.body.windowId, 'window-refresh-overlap')
+  } finally {
+    controllers.forEach((controller) => controller.abort())
+    await Promise.all(registrations)
+    await broker.stop()
+  }
+})

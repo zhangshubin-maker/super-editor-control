@@ -244,14 +244,23 @@ function createRpcBrokerServer(options = {}) {
     })
   }
 
-  function claimInstance(clientId, preferredInstance, preferredWindowId) {
+  function claimInstance(
+    clientId,
+    preferredInstance,
+    preferredWindowId,
+    excludedInstance
+  ) {
     pruneExpired()
     const canClaim = (instance) => {
       const lease = leases.get(instance)
-      return queues.has(instance) && (!lease || lease.clientId === clientId)
+      return (
+        instance !== excludedInstance &&
+        queues.has(instance) &&
+        (!lease || lease.clientId === clientId)
+      )
     }
     let instance = null
-    if (preferredInstance) {
+    if (preferredInstance && preferredInstance !== excludedInstance) {
       const instanceWindowId = instanceWindowIds.get(preferredInstance) || ''
       if (
         queues.has(preferredInstance) &&
@@ -265,7 +274,10 @@ function createRpcBrokerServer(options = {}) {
     }
     if (!instance && preferredWindowId) {
       const matches = instances.filter(
-        (id) => queues.has(id) && instanceWindowIds.get(id) === preferredWindowId
+        (id) =>
+          id !== excludedInstance &&
+          queues.has(id) &&
+          instanceWindowIds.get(id) === preferredWindowId
       )
       if (matches.length > 1) {
         return { instance: null, windowId: preferredWindowId, errorCode: 'WINDOW_AMBIGUOUS' }
@@ -391,7 +403,13 @@ function createRpcBrokerServer(options = {}) {
     pruneExpired()
     const preferredInstance = String(body.preferredInstance || '')
     const preferredWindowId = String(body.preferredWindowId || '')
-    const claim = claimInstance(clientId, preferredInstance, preferredWindowId)
+    const excludedInstance = String(body.excludedInstance || '')
+    const claim = claimInstance(
+      clientId,
+      preferredInstance,
+      preferredWindowId,
+      excludedInstance
+    )
     if (!claim.instance) {
       const hasInstances = instances.some((id) => queues.has(id))
       const errorMap = {

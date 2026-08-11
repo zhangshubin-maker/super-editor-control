@@ -191,6 +191,13 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
     assert.equal(switched.bridgeReady, true)
     assert.equal(switched.windowId, 'mock-window')
     assert.equal(switched.currentSlideId, 'slide-1')
+    assert.equal(switched.hotSwitched, true)
+    assert.equal(switched.reloadScheduled, false)
+    assert.equal(switched.contextEpoch, 2)
+    assert.equal(switched.instancePreserved, true)
+    assert.equal(switched.contentReady, true)
+    assert.equal(switched.currentSlidePlaceholder, false)
+    assert.equal(switched.emptyBook, false)
 
     const uploaded = readToolData(
       await client.request('tools/call', {
@@ -985,6 +992,22 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
     assert.match(
       byName.get('editor_jump_to_book').description,
       /ai_control=1.*#\/content-editor.*不得拼在 hash 前/
+    )
+    assert.match(
+      byName.get('editor_jump_to_book').description,
+      /原 RPC 实例.*contextEpoch.*完整刷新.*同一 windowId/
+    )
+    assert.match(
+      byName.get('editor_jump_to_book').description,
+      /contentReady=true.*emptyBook.*currentSlidePlaceholder=true/
+    )
+    assert.match(
+      byName.get('editor_jump_to_book').description,
+      /排除.*旧 instanceId.*同一 windowId 的新实例/
+    )
+    assert.match(
+      byName.get('editor_jump_to_book').inputSchema.properties.target.description,
+      /优先原实例热切书.*完整刷新兜底/
     )
     assert.match(byName.get('editor_checkpoint').description, /^\[会话内快照\|不写库\]/)
     assert.match(byName.get('editor_clear_checkpoints').description, /^\[会话内快照\|不写库\]/)

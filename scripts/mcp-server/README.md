@@ -17,8 +17,8 @@
 - MCP 进程启动时争用 `127.0.0.1:8765`。首个进程成为 broker owner，其他进程作为 follower
   复用；owner 退出后 follower 通常在约 2 秒内自动接管。
 - `editor_*` 工具第一次调用时自动选择并租用可用页面，无需 `pageUrl` / `httpUrl`。
-- 首次连接后会固定页面的 `windowId`；刷新或当前窗口切书时最多等待 30 秒，只认领同一浏览器窗口重新注册的新实例，其他已打开书本不会成为回退目标。
-- `editor_jump_to_book(target=current)` 会先检查 dirty 状态；需要保存时传 `saveBeforeSwitch=true`。导航后工具会等待目标 `bookId` 的新实例完成 `ping/getState`，成功返回 `ready=true`，不再把 `scheduled=true` 当成切书完成。
+- 首次连接后会固定页面的 `windowId`。Bridge v1.9.0 热切书时继续使用原 `instanceId` 和租约；旧 Bridge 安排完整刷新后，驱动立即建立新实例屏障，排除旧 `instanceId`（即使它在 50ms 延迟期已上报目标书状态），最多等待 30 秒并只认领同一浏览器窗口的新实例，其他已打开书本不会成为回退目标。
+- `editor_jump_to_book(target=current)` 会先检查 dirty 状态；需要保存时传 `saveBeforeSwitch=true`。工具优先等待原实例的目标 `bookId`、`contextEpoch` 和 `bookSwitching=false` 在 `ping/getState` 中收敛，并确认普通书存在当前目录且 `contentReady=true`；`emptyBook=true` 和 `currentSlidePlaceholder=true` 是显式可就绪例外。刷新兜底不沿用旧页 epoch，只等待同一 `windowId` 的新实例。成功统一返回 `ready=true`，不把 `scheduled=true` 当成切书完成；v1.8 无内容就绪字段时保持兼容。
 - 新标签页/新窗口使用不同 `windowId`；如果检测到同一窗口身份对应多个页面，会以 `WINDOW_AMBIGUOUS` 安全失败，禁止猜测和串页。
 - `editor_status` 只报告可用页面；没有活动连接时不会占用租约。
 - 多任务会租用不同页面；工具执行期间续租，空闲 30 秒后可被其他任务使用。
@@ -54,7 +54,7 @@ node index.js
 | `editor_get_state` / `editor_get_slide` | 读取课件与页面 |
 | `editor_list_slides` / `editor_select_slide` | 列出并安全切换目录；dirty 时显式保存或丢弃改动 |
 | `editor_search_books` / `editor_get_book` / `editor_create_book` | 搜索、核对并创建书本 |
-| `editor_jump_to_book` | 生成书本 URL，或完整刷新当前窗口并等待目标书本加载就绪 |
+| `editor_jump_to_book` | 生成书本 URL，或在当前窗口原实例热切书并等待目标上下文就绪；兼容完整刷新兜底 |
 | `editor_get_book_manifest` / `editor_search_book_content` | 按当前目录或显式整书范围理解、搜索课件内容 |
 | `editor_save_verified` | 保存当前 dirty 页并回读校验；可显式执行整书摘要校验 |
 | `editor_list_book_versions` / `editor_get_book_version` / `editor_restore_book_version` | 查询、预检和恢复后端持久版本 |

@@ -206,7 +206,7 @@ async function runBrowserPage(port, instance, signal, options = {}) {
   }
 }
 
-test('MCP 当前窗口切书会等待同一 windowId 的目标书本真正就绪', { timeout: 20000 }, async () => {
+test('MCP 刷新切书不沿用旧实例 epoch，并等待同一 windowId 的目标书本就绪', { timeout: 20000 }, async () => {
   const port = await getFreePort()
   const client = createMcpClient(port)
   const otherController = new AbortController()
@@ -230,10 +230,15 @@ test('MCP 当前窗口切书会等待同一 windowId 的目标书本真正就绪
       windowId: 'window-target',
       bookId: 'book-old',
       onCommand(command, fallback) {
+        if (command.method === 'ping' || command.method === 'getState') {
+          return { ...fallback, contextEpoch: 7 }
+        }
         if (command.method !== 'jumpToBook') return fallback
         return {
           bookId: command.args[0].bookId,
           target: 'current',
+          hotSwitched: false,
+          contextEpoch: 7,
           scheduled: true,
           reloadScheduled: true
         }
@@ -269,7 +274,13 @@ test('MCP 当前窗口切书会等待同一 windowId 的目标书本真正就绪
 
     newPage = runBrowserPage(port, 'page-target-new', newController.signal, {
       windowId: 'window-target',
-      bookId: 'book-new'
+      bookId: 'book-new',
+      onCommand(command, fallback) {
+        if (command.method === 'ping' || command.method === 'getState') {
+          return { ...fallback, contextEpoch: 0 }
+        }
+        return fallback
+      }
     })
     await waitForInstance(port, 'page-target-new')
 
@@ -280,7 +291,12 @@ test('MCP 当前窗口切书会等待同一 windowId 的目标书本真正就绪
     assert.equal(switched.data.bookId, 'book-new')
     assert.equal(switched.data.windowId, 'window-target')
     assert.equal(switched.data.instanceId, 'page-target-new')
+    assert.equal(switched.data.instancePreserved, false)
     assert.equal(switched.data.currentSlideId, 'slide-book-new')
+    assert.equal(switched.data.contextEpoch, 0)
+    assert.equal(Object.hasOwn(switched.data, 'contentReady'), false)
+    assert.equal(Object.hasOwn(switched.data, 'currentSlidePlaceholder'), false)
+    assert.equal(Object.hasOwn(switched.data, 'emptyBook'), false)
     assert.equal(typeof switched.data.durationMs, 'number')
   } finally {
     otherController.abort()
@@ -288,6 +304,331 @@ test('MCP 当前窗口切书会等待同一 windowId 的目标书本真正就绪
     newController.abort()
     await Promise.all([otherPage, oldPage, newPage].filter(Boolean))
     await client.close()
+  }
+})
+
+test('MCP 刷新延迟期间拒绝仍存活的旧实例，只接受真正的新实例', { timeout: 20000 }, async () => {
+  const port = await getFreePort()
+  const client = createMcpClient(port)
+  const oldController = new AbortController()
+  const newController = new AbortController()
+  let oldReportsTarget = false
+  let resolveJumpResult
+  const jumpResultPosted = new Promise((resolve) => {
+    resolveJumpResult = resolve
+  })
+  const oldPage = runBrowserPage(port, 'page-delayed-old', oldController.signal, {
+    windowId: 'window-delayed-refresh',
+    bookId: 'book-old',
+    onCommand(command, fallback) {
+      if (command.method === 'jumpToBook') {
+        oldReportsTarget = true
+        return {
+          bookId: 'book-new',
+          target: 'current',
+          hotSwitched: false,
+          scheduled: true,
+          reloadScheduled: true,
+          contextEpoch: 8
+        }
+      }
+      if (!oldReportsTarget) return fallback
+      if (command.method === 'ping') {
+        return { ...fallback, bookId: 'book-new', contextEpoch: 8 }
+      }
+      if (command.method === 'getState') {
+        return {
+          bookId: 'book-new',
+          bookInfo: { id: 'book-new' },
+          currentSlideId: 'slide-old-instance-target-state',
+          contextEpoch: 8,
+          dirty: false
+        }
+      }
+      return fallback
+    },
+    afterResult(command) {
+      if (command.method === 'jumpToBook') resolveJumpResult()
+    }
+  })
+  let newPage = null
+
+  try {
+    await initialize(client)
+    await waitForInstance(port, 'page-delayed-old')
+    const connected = readToolResult(
+      await client.call('tools/call', { name: 'editor_connect', arguments: {} })
+    )
+    assert.equal(connected.data.instanceId, 'page-delayed-old')
+
+    let switchSettled = false
+    const switchPromise = client.call(
+      'tools/call',
+      {
+        name: 'editor_jump_to_book',
+        arguments: { bookId: 'book-new', target: 'current' }
+      },
+      15000
+    )
+    switchPromise.then(
+      () => {
+        switchSettled = true
+      },
+      () => {
+        switchSettled = true
+      }
+    )
+    await jumpResultPosted
+    await wait(250)
+    assert.equal(oldReportsTarget, true)
+    assert.equal(switchSettled, false)
+
+    newPage = runBrowserPage(port, 'page-delayed-new', newController.signal, {
+      windowId: 'window-delayed-refresh',
+      bookId: 'book-new'
+    })
+    await waitForInstance(port, 'page-delayed-new')
+
+    const switched = readToolResult(await switchPromise)
+    assert.equal(switched.isError, false)
+    assert.equal(switched.data.ready, true)
+    assert.equal(switched.data.instanceId, 'page-delayed-new')
+    assert.equal(switched.data.instancePreserved, false)
+    assert.equal(switched.data.currentSlideId, 'slide-book-new')
+  } finally {
+    oldController.abort()
+    newController.abort()
+    await Promise.all([oldPage, newPage].filter(Boolean))
+    await client.close()
+  }
+})
+
+test('MCP 热切书会保留原实例并等待 contextEpoch 收敛', { timeout: 15000 }, async () => {
+  const port = await getFreePort()
+  const releases = []
+  let phase = 'old'
+  let postJumpPingCount = 0
+  let postJumpStateCount = 0
+  const fakeBroker = await createFakeDriverBroker(port, {
+    instance: 'page-hot-switch',
+    onRelease(body) {
+      releases.push(body)
+    },
+    onRequest(body, res) {
+      if (body.method === 'ping') {
+        if (phase === 'switching') {
+          postJumpPingCount += 1
+          const ready = postJumpPingCount >= 2
+          sendJsonResponse(res, {
+            ok: true,
+            value: {
+              version: '1.9.0',
+              editorType: 'content-editor',
+              bookId: 'book-new',
+              instanceId: 'page-hot-switch',
+              windowId: 'window-hot-switch',
+              contextEpoch: ready ? 2 : 1,
+              bookSwitching: !ready
+            }
+          })
+          return
+        }
+        sendJsonResponse(res, {
+          ok: true,
+          value: {
+            version: '1.9.0',
+            editorType: 'content-editor',
+            bookId: 'book-old',
+            instanceId: 'page-hot-switch',
+            windowId: 'window-hot-switch',
+            contextEpoch: 1,
+            bookSwitching: false
+          }
+        })
+        return
+      }
+      if (body.method === 'getState') {
+        const contextReady = phase === 'switching' && postJumpPingCount >= 2
+        if (contextReady) postJumpStateCount += 1
+        const contentReady = contextReady && postJumpStateCount >= 2
+        sendJsonResponse(res, {
+          ok: true,
+          value: {
+            bookId: contextReady ? 'book-new' : 'book-old',
+            bookInfo: { id: contextReady ? 'book-new' : 'book-old' },
+            currentSlideId: contextReady ? 'slide-book-new' : 'slide-book-old',
+            contextEpoch: contextReady ? 2 : 1,
+            bookSwitching: phase === 'switching' && !contextReady,
+            contentReady,
+            currentSlidePlaceholder: false,
+            emptyBook: false,
+            dirty: false
+          }
+        })
+        return
+      }
+      if (body.method === 'jumpToBook') {
+        phase = 'switching'
+        sendJsonResponse(res, {
+          ok: true,
+          value: {
+            bookId: body.args[0].bookId,
+            target: 'current',
+            hotSwitched: true,
+            reloadScheduled: false,
+            contextEpoch: 2
+          }
+        })
+        return
+      }
+      sendJsonResponse(res, { ok: true, value: null })
+    }
+  })
+  const client = createMcpClient(port)
+
+  try {
+    await initialize(client)
+    const switched = readToolResult(
+      await client.call(
+        'tools/call',
+        {
+          name: 'editor_jump_to_book',
+          arguments: { bookId: 'book-new', target: 'current' }
+        },
+        10000
+      )
+    )
+    assert.equal(switched.isError, false)
+    assert.equal(switched.data.ready, true)
+    assert.equal(switched.data.hotSwitched, true)
+    assert.equal(switched.data.reloadScheduled, false)
+    assert.equal(switched.data.contextEpoch, 2)
+    assert.equal(switched.data.contentReady, true)
+    assert.equal(switched.data.currentSlidePlaceholder, false)
+    assert.equal(switched.data.emptyBook, false)
+    assert.equal(switched.data.instanceId, 'page-hot-switch')
+    assert.equal(switched.data.instancePreserved, true)
+    assert.equal(switched.data.windowId, 'window-hot-switch')
+    assert.equal(switched.data.currentSlideId, 'slide-book-new')
+    assert.ok(postJumpPingCount >= 2)
+    assert.ok(postJumpStateCount >= 2)
+    assert.equal(releases.length, 0)
+  } finally {
+    await client.close()
+    await new Promise((resolve) => fakeBroker.close(resolve))
+  }
+})
+
+test('MCP 热切空书和 PDF 占位目录可作为显式内容就绪例外', { timeout: 15000 }, async () => {
+  const port = await getFreePort()
+  let current = {
+    bookId: 'book-old',
+    contextEpoch: 1,
+    currentSlideId: 'slide-old',
+    contentReady: true,
+    currentSlidePlaceholder: false,
+    emptyBook: false
+  }
+  const fakeBroker = await createFakeDriverBroker(port, {
+    instance: 'page-hot-exceptions',
+    onRequest(body, res) {
+      if (body.method === 'ping') {
+        sendJsonResponse(res, {
+          ok: true,
+          value: {
+            version: '1.9.0',
+            editorType: 'content-editor',
+            bookId: current.bookId,
+            instanceId: 'page-hot-exceptions',
+            windowId: 'window-hot-exceptions',
+            contextEpoch: current.contextEpoch,
+            bookSwitching: false
+          }
+        })
+        return
+      }
+      if (body.method === 'getState') {
+        sendJsonResponse(res, {
+          ok: true,
+          value: {
+            ...current,
+            bookInfo: { id: current.bookId },
+            bookSwitching: false,
+            dirty: false
+          }
+        })
+        return
+      }
+      if (body.method === 'jumpToBook') {
+        const targetBookId = body.args[0].bookId
+        const nextEpoch = current.contextEpoch + 1
+        current =
+          targetBookId === 'book-empty'
+            ? {
+                bookId: targetBookId,
+                contextEpoch: nextEpoch,
+                currentSlideId: null,
+                contentReady: false,
+                currentSlidePlaceholder: false,
+                emptyBook: true
+              }
+            : {
+                bookId: targetBookId,
+                contextEpoch: nextEpoch,
+                currentSlideId: 'pdf-placeholder-1',
+                contentReady: false,
+                currentSlidePlaceholder: true,
+                emptyBook: false
+              }
+        sendJsonResponse(res, {
+          ok: true,
+          value: {
+            bookId: targetBookId,
+            target: 'current',
+            hotSwitched: true,
+            reloadScheduled: false,
+            contextEpoch: nextEpoch
+          }
+        })
+        return
+      }
+      sendJsonResponse(res, { ok: true, value: null })
+    }
+  })
+  const client = createMcpClient(port)
+
+  try {
+    await initialize(client)
+    const emptyBook = readToolResult(
+      await client.call('tools/call', {
+        name: 'editor_jump_to_book',
+        arguments: { bookId: 'book-empty', target: 'current' }
+      })
+    )
+    assert.equal(emptyBook.isError, false)
+    assert.equal(emptyBook.data.ready, true)
+    assert.equal(emptyBook.data.currentSlideId, null)
+    assert.equal(emptyBook.data.contentReady, false)
+    assert.equal(emptyBook.data.currentSlidePlaceholder, false)
+    assert.equal(emptyBook.data.emptyBook, true)
+    assert.equal(emptyBook.data.instancePreserved, true)
+
+    const pdfPlaceholder = readToolResult(
+      await client.call('tools/call', {
+        name: 'editor_jump_to_book',
+        arguments: { bookId: 'book-pdf', target: 'current' }
+      })
+    )
+    assert.equal(pdfPlaceholder.isError, false)
+    assert.equal(pdfPlaceholder.data.ready, true)
+    assert.equal(pdfPlaceholder.data.currentSlideId, 'pdf-placeholder-1')
+    assert.equal(pdfPlaceholder.data.contentReady, false)
+    assert.equal(pdfPlaceholder.data.currentSlidePlaceholder, true)
+    assert.equal(pdfPlaceholder.data.emptyBook, false)
+    assert.equal(pdfPlaceholder.data.instancePreserved, true)
+  } finally {
+    await client.close()
+    await new Promise((resolve) => fakeBroker.close(resolve))
   }
 })
 

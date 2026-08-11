@@ -65,7 +65,7 @@ description: 超媒编辑器（super-editor-control 插件）的书本管理技�
 
 - `url`：只返回编辑器 URL，默认且最安全。
 - `new`：尝试打开新标签页；浏览器阻止弹窗时使用返回的 URL 手动打开。
-- `current`：先替换目标 URL，再完整刷新当前窗口；MCP 固定原 `windowId`，等待目标书本和目录加载就绪后才返回。当前页 dirty 时必须传 `saveBeforeSwitch: true`，由工具先保存并回读验证。
+- `current`：Bridge v1.9.0 优先在原页面和原 RPC `instanceId` 内原子热切书；MCP 等待目标 `bookId`、`contextEpoch`、非切换中状态及内容就绪后才返回。普通书必须存在当前目录且 `contentReady=true`；`emptyBook=true` 或 `currentSlidePlaceholder=true` 是无需普通画布内容的显式例外。旧 Bridge 或热切无法安全完成时允许完整刷新兜底，并只按原 `windowId` 接回新实例。当前页 dirty 时必须传 `saveBeforeSwitch: true`，由工具先保存并回读验证。
 
 **URL 不变式**：`book_id`、`business_id`、`Scope`、`token` 和 `ai_control=1` 都属于
 `#/content-editor` 路由，必须放在 hash 路由后的查询串中；禁止放在 hash 前的外层 URL
@@ -75,9 +75,11 @@ description: 超媒编辑器（super-editor-control 插件）的书本管理技�
 https://host/hyper-media-editor/#/content-editor?business_id=...&Scope=...&book_id=1820651&winOpen=1&ai_control=1
 ```
 
-跳转到另一本书时必须删除旧 `catalog_id`，避免新书携带旧书目录。跳转会让原页面 RPC
+跳转到另一本书时必须删除旧 `catalog_id`，避免新书携带旧书目录。热切成功不应让原页面 RPC
 实例失效；`target=current` 成功结果必须包含目标 `bookId`、`ready=true`、`bridgeReady=true`、
-新 `instanceId` 和原 `windowId`。`scheduled: true` 只表示 Bridge 已安排刷新，不是最终成功。
+当前 `instanceId` 和原 `windowId`。新 Bridge 还会返回 `hotSwitched=true`、`contextEpoch` 和
+`instancePreserved=true`，以及 `contentReady/currentSlidePlaceholder/emptyBook` 内容状态；刷新兜底必须返回不同于旧页的新 `instanceId` 与 `instancePreserved=false`。旧实例即使在刷新延迟期上报了目标书状态也不能作为成功结果；新实例 `contextEpoch` 可以从 0 重新开始，不能拿旧页 epoch 作为门槛。
+`scheduled: true` 只表示旧 Bridge 已安排刷新，不是最终成功。
 `url/new` 不等待目标页面；需要继续操作时仍用 `editor_status` 核对。仅在跨会话打开确实需要时传
 `includeToken: true`。
 
@@ -87,7 +89,7 @@ https://host/hyper-media-editor/#/content-editor?business_id=...&Scope=...&book_
 2. `editor_get_book` 核对源书。
 3. 向用户确认目标名称、交互类型和封面（用户已明确时无需重复询问）。
 4. `editor_create_book` 创建并核对 `copyMode`、`includesCatalogAndContent` 与返回属性。
-5. `editor_jump_to_book(target=current)` 跳转并等待目标书本就绪；若返回 `BOOK_SWITCH_TIMEOUT`，先读取状态，不重复发起导航。
+5. `editor_jump_to_book(target=current)` 热切或兜底刷新并等待目标书本就绪；优先核对 `ready`、`bookId`、`contextEpoch`、`instancePreserved` 及三项内容状态。若返回 `BOOK_SWITCH_TIMEOUT`，先读取状态，不重复发起导航。
 6. 若要继续自主设计目录，转用 `super-editor-assets` 搜索样章、区块、组件和图片素材。
 
 ## 工具速查

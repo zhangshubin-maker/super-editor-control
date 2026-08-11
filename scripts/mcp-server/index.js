@@ -251,12 +251,12 @@ const TOOLS = [
   },
   {
     name: 'editor_jump_to_book',
-    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 会完整刷新当前页，并等待同一 windowId 的目标书本和目录加载就绪后返回；new 尝试打开新标签页。book_id、business_id、Scope、token 和 ai_control=1 必须且只能放在 #/content-editor 后的路由查询参数中，不得拼在 hash 前的外层查询串。',
+    description: '生成或执行书本编辑器跳转。target=url 仅返回 URL；current 优先在原页面和原 RPC 实例内原子热切书，并等待目标 bookId、contextEpoch 和内容状态收敛：普通书必须有当前目录且 contentReady=true，emptyBook 或 currentSlidePlaceholder=true 是显式可就绪例外；旧 Bridge 或热切失败时兼容无这些字段的完整刷新，排除发出导航的旧 instanceId，并只接回同一 windowId 的新实例；new 尝试打开新标签页。book_id、business_id、Scope、token 和 ai_control=1 必须且只能放在 #/content-editor 后的路由查询参数中，不得拼在 hash 前的外层查询串。',
     inputSchema: {
       type: 'object',
       properties: {
         bookId: { type: ['string', 'number'], description: '目标书本 id' },
-        target: { type: 'string', enum: ['url', 'current', 'new'], description: '默认 url' },
+        target: { type: 'string', enum: ['url', 'current', 'new'], description: '默认 url；current 优先原实例热切书，必要时完整刷新兜底' },
         includeToken: { type: 'boolean', description: 'URL 是否包含登录 token，默认 false' },
         saveBeforeSwitch: { type: 'boolean', description: 'target=current 且当前页 dirty 时，是否先保存并回读验证；默认 false，dirty 时拒绝切换' }
       },

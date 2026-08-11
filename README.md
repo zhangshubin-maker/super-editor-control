@@ -45,6 +45,11 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
 
 `editor_status` 是只读检查，不会长期占用页面。`editor_connect` 仅用于主动重新选择页面。
 
+`editor_jump_to_book(target=current)` 在 Bridge v1.9.0 中优先原页面热切书：RPC 的
+`instanceId/windowId` 保持不变，MCP 等待目标 `bookId`、`contextEpoch` 和内容状态一致后再返回；
+普通目录要求 `contentReady=true`，空书和 PDF 占位目录通过显式状态安全放行。
+插件仍兼容 v1.8.2 的完整刷新式 Bridge；刷新兜底会排除旧 `instanceId`，只接回同一 `windowId` 下真正的新实例，不会误连旧页或其他已打开书本。
+
 ## 整书创作与调用粒度
 
 整书工具遵循“小改动小调用、大任务大调用”：

@@ -114,7 +114,7 @@ window.__SUPER_EDITOR_RPC_URL || 'http://127.0.0.1:8765/ai-control'
 ### 3.4 页面发现与租约
 
 - `GET /instances`：返回仍在心跳的页面 ID。
-- `POST /claim`：MCP 进程用 `clientId` 租用页面。
+- `POST /claim`：MCP 进程用 `clientId` 租用页面；可传 `preferredInstance`、`preferredWindowId`，刷新重连时还可传 `excludedInstance` 排除仍在卸载延迟期的旧页面。排除后只在同一 `preferredWindowId` 内认领其他实例，即使新旧实例短暂并存也不因旧实例产生歧义。
 - `POST /release`：取消当前客户端尚未派发的命令并释放租约；若存在已派发命令，租约延迟到结果返回后释放。
 - 页面心跳 TTL 为 120 秒；客户端租约空闲 TTL 为 30 秒。已派发命令在途时不会被空闲 TTL 抢占。
 - 多个 Codex 任务优先获得不同页面；全部页面占用时返回 `INSTANCE_BUSY`。
