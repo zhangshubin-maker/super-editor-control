@@ -245,8 +245,9 @@ Bridge 1.6.0 起，内容级工具同时支持普通文本、表格单元格和�
 - 不破坏 `hyperlinkParamList`、拼音、列表层级、公式/图片 embeds、任意 `data-*`、answer-tag、phoneme
   及图片尺寸/样式属性。发现未知 embed/blot 时先只读，不整体重写。
 - 写入后以 Bridge 返回的规范化内容为准，不以输入 HTML 为准。
-- Bridge 会用生产 Quill/`convertHTML` 最多稳定化 5 轮；若返回
-  `TEXT_CANONICALIZATION_UNSTABLE`，说明相邻序列化结果仍不同，应停止写入并保留原内容，不要绕过检查。
+- Bridge 会用生产 Quill/`convertHTML` 最多稳定化 5 轮。HTML 形态不同但文本顺序、有效样式、内嵌对象
+  和超链接语义一致时可安全通过；不要因标签嵌套、属性顺序或连续 run 切分差异自行降级为纯文本。
+  若真实语义变化或返回 `TEXT_CANONICALIZATION_UNSTABLE`，停止写入并保留原内容，不要绕过检查。
 - 独立文本框若 `settled=false`、`needResetSize=true` 或检查结果仍有 overflow，不要直接保存；先重新定位、
   重测或回滚。嵌套目标若 `deferredLayout=true`，用所属表格/思维导图截图完成领域布局核对。
 - 批量替换先 dry run，核对命中数与上下文，再执行实际写入。

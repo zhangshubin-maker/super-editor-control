@@ -452,7 +452,7 @@ type 82 中 `timeMode=0` 是正计时、`timeMode=1` 是倒计时；倒计时必
 | `setTextContent(payload)` | `{ ...selector, content, expectedContentHash?, dryRun?, fitSize?, waitMs? }`（纯文本自动包 `<p>`，换行自动拆段；实际写入时 fitSize 默认 true） | 统一目标身份 + `{ dryRun, changed, previousContentHash, contentHash, content, plainText, displayText, indexText }`；独立文本写入另返回 width/height/dWidth/dHeight/autoResized/moved[] |
 | `setTextAdaptive(payload)` | `{ elementId, extendType, fitSize?, waitMs? }`（both/horizontal/vertical/none） | `{ elementId, extendType, previous, width, height, dWidth, dHeight, autoResized, moved[] }` |
 | `fitTextSize(payload)` | `{ elementId, waitMs? }`（强制重测） | `{ elementId, width, height, dWidth, dHeight, autoResized, moved[] }` |
-| `getTextDocument(payload)` | `{ ...selector, includeHtml?, includeRuns?, includeParagraphs?, includeEmbeds? }` | 统一目标身份 + `{ blockId, content, html?, canonicalHtml?, plainText/displayText, displayLength, indexText, displayIndexMap, length, indexUnit, indexModel, terminalNewline, contentHash, htmlHash, hyperlinkMetadataHash, canonicalized, roundTripSafe, roundTripWarnings, paragraphs?, runs?, embeds?, hyperlinks, orphanedHyperlinkMetadata, defaultStyle, layout, geometry }`；拼音 word 只在显示文本中展开，写入范围使用结构索引 |
+| `getTextDocument(payload)` | `{ ...selector, includeHtml?, includeRuns?, includeParagraphs?, includeEmbeds? }` | 统一目标身份 + `{ blockId, content, html?, canonicalHtml?, plainText/displayText, displayLength, indexText, displayIndexMap, length, indexUnit, indexModel, terminalNewline, contentHash, htmlHash, hyperlinkMetadataHash, canonicalized, serializationStable, semanticEquivalent, renderEquivalent, interactionEquivalent, roundTripSafe, roundTripWarnings, paragraphs?, runs?, embeds?, hyperlinks, orphanedHyperlinkMetadata, defaultStyle, layout, geometry }`；拼音 word 只在显示文本中展开，写入范围使用结构索引 |
 | `formatText(payload)` 的 MCP 默认样式别名 | `editor_text_set_style({ ...selector, style, expectedContentHash?, fitSize?, waitMs? })` | 等价于 `formatText({ scope: 'default', formats: style })`；只接受默认字体/字号/颜色/粗斜体/行距/字距等字段，不强行覆盖已有内联 run |
 | `editText(payload)` | `{ ...selector, action: insert/replace/delete/findReplace, index?, length?, text?, html?, match?, occurrence?, caseSensitive?, replaceAll?, expectedContentHash?, dryRun?, fitSize?, waitMs? }` | 统一目标身份 + `{ action, dryRun, changed, changes[], beforeHash, previousContentHash, contentHash, plainText, content, canonical, indexUnit, indexModel, width?, height?, moved? }`；insert 用 index，replace/delete 用 index+length，只有 findReplace 用 match；findReplace 省略 text/html 时删除匹配 |
 | `setTextLink(payload)` | `{ ...selector, index, length, hyperlinkId?, hyperlink?, expectedContentHash?, dryRun?, fitSize?, waitMs? }` | 统一目标身份 + `{ changed, dryRun, range, hyperlinkId, hyperlink, previousContentHash, contentHash, plainText, content, width?, height?, moved? }`；原子设置链接格式并同步 hyperlinkParamList。新链接的 `hyperlink.hyperlink_id` 可省略，由 Bridge 生成并以返回的 `hyperlinkId` 为准。兄弟单元格/节点仍引用同一 id 时，单目标 metadata 修改返回 `TEXT_HYPERLINK_SHARED`，应省略 id 新建独立链接。URL 元数据用 `input_type/link_mode/jump_type=1/link_address/agent_id=0/agent_params=[]`；智能体用 jump_type=2 和真实 agent_id/agent_params |
@@ -480,8 +480,10 @@ type 82 中 `timeMode=0` 是正计时、`timeMode=1` 是倒计时；倒计时必
 `fitTextSize` 会让文本框按内容和 `extendType` 改变尺寸，不改正文且不接受 expectedContentHash/dryRun；
 `fitTextToBox` 则保持文本框尺寸并缩小字号，接受 expectedContentHash 但不接受 dryRun，二者不可互换。
 混合字号只有在用户明确同意统一后才传 `allowUniformizeMixedSizes=true`。不要用 `updateElement` 直接拼接富文本 HTML，以免破坏超链接、公式、列表和格式范围。
-读取及内容写入共用有界 canonical 稳定化：最多 5 轮 `parse → production convertHTML`，相邻两轮
-完全一致才返回或落库；每轮执行安全往返检查，超限抛 `TEXT_CANONICALIZATION_UNSTABLE`。
+读取及内容写入共用有界 canonical 稳定化：最多 5 轮 `parse → production convertHTML`。相邻两轮
+HTML 完全一致，或 Quill 文档的文本顺序、有效样式、内嵌对象及超链接语义一致，均可返回或落库；
+标签嵌套、属性顺序和连续 run 切分差异不单独阻塞。每轮仍执行受保护结构检查，真实语义变化或超限
+继续拒绝写入。
 
 ### 数据交换（备份 / 整页导入导出）
 

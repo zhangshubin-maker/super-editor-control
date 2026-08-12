@@ -183,8 +183,9 @@ node index.js
   最近读取到的 `expectedContentHash`，它同时保护正文与超链接参数。
 - 只有明确要整段重写时使用 `editor_text_set_content`，并同样带最新 `expectedContentHash`、先
   `dryRun=true`；它会检查未知链接和不能安全往返的内嵌结构。
-- 正文读取与写入最多执行 5 轮生产 `parse → convertHTML`，直到相邻两轮结果一致；每轮都会检查
-  自定义格式和内嵌对象是否安全往返，超限返回 `TEXT_CANONICALIZATION_UNSTABLE` 而不写入。
+- 正文读取与写入最多执行 5 轮生产 `parse → convertHTML`。相邻结果完全一致，或其 Quill 文档的
+  文本顺序、有效样式、内嵌对象和超链接语义一致，均可通过；仅标签嵌套、属性顺序或连续 run 切分
+  不同不再阻塞。每轮仍检查受保护结构；真实语义变化或超限都不写入。
 - 超链接不要塞进 `editor_text_format`：用 `editor_text_set_link` 原子设置范围并同步
   `hyperlinkParamList`，用 `editor_text_remove_link` 按 id 或范围移除。新链接必须提供真实元数据，不能猜测；
   `hyperlink_id` 可省略并由 Bridge 生成，后续以返回的 `hyperlinkId` 为准。

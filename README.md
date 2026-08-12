@@ -174,8 +174,9 @@ legacy `elementId`。
   `expectedContentHash` 可阻止正文或链接元数据的并发覆盖，`dryRun` 可先预览命中范围。
 - `editor_text_set_content` 只用于明确的整段重写，也支持 `expectedContentHash + dryRun`，避免把并发修改
   或不能安全往返的内嵌结构直接覆盖。
-- 正文读取与写入使用生产 Quill/`convertHTML` 做有界稳定化：最多 5 轮，直到相邻两轮 HTML 完全一致，
-  且每轮保留安全往返检查；超限会返回 `TEXT_CANONICALIZATION_UNSTABLE`，不会落库。
+- 正文读取与写入使用生产 Quill/`convertHTML` 做有界稳定化：相邻两轮 HTML 完全一致，或文本顺序、
+  有效样式、内嵌对象与超链接语义一致，均可作为安全边界；标签嵌套、属性顺序和连续 run 切分差异不再
+  单独阻塞。每轮仍检查受保护结构，最多 5 轮；真实语义变化或超限都不会落库。
 - `editor_text_set_link` / `editor_text_remove_link` 原子维护文字范围和超链接元数据；
   新链接的 `hyperlink_id` 可省略并由 Bridge 生成，后续以返回的 id 为准；`editor_text_edit_embed`
   原子增删改公式、拼音和内嵌图片。自定义 blot 未注册时会拒绝写入。
