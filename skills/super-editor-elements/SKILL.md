@@ -15,7 +15,7 @@ description: 超媒编辑器通用元素操作技能。用户要求新增、删�
 - `editor_update_element` 只修改几何、通用样式和资源等字段。**禁止**用它写文本元素的
   `content`、`hyperlinkParamList` 或字数统计字段；这些字段必须交给 `super-editor-text`。
 - `patch` 是浅合并；修改 `background`、`outline` 等嵌套对象前先读完整对象，再整体传回。
-- 坐标是所属区块的局部坐标。组内子元素坐标相对组，移动组可能影响全部子元素。
+- 坐标是所属区块的局部坐标；即使元素位于组内，子元素的 `left/top` 仍然是相对所属区块的坐标，不是相对父组的坐标。移动组可能影响全部子元素。
 - 不套用固定品牌色、字体或字号；先复用当前书和代表性模板的设计语言。
 
 ## 常用 MCP 工具
@@ -26,7 +26,7 @@ description: 超媒编辑器通用元素操作技能。用户要求新增、删�
 | 搜索元素 | `editor_search_elements` | 按当前页名称、内容、类型或区块缩小目标 |
 | 新增 | `editor_add_element` | 传 `blockId/type/payload` |
 | 修改通用属性 | `editor_update_element` | 几何、通用样式、非富文本字段 |
-| 精确移动/缩放/旋转 | `editor_move_element` / `editor_resize_element` / `editor_rotate_element` | 单元素 typed 操作 |
+| 精确移动/缩放/旋转 | `editor_move_element` / `editor_resize_element` / `editor_rotate_element` | 单元素 typed 操作；移动支持组内子元素，无需解组 |
 | 删除 | `editor_delete_element` | 删除前按公共策略判断风险 |
 | 批量复制 | `editor_duplicate_elements` | 支持偏移量 |
 | 批量偏移 | `editor_move_elements_by_offset` | 相对移动多个元素 |

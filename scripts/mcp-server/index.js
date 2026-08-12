@@ -1033,7 +1033,7 @@ const TOOLS = [
   },
   {
     name: 'editor_move_element',
-    description: '把单个元素整体移动，使其几何包围盒左上角到达 owner 区块内的 block-local (x, y)。它不是整页 pageY 或视口坐标；Bridge 会先校验完整包围盒，越出 owner 区块时零写入拒绝。',
+    description: '把单个元素整体移动，使其几何包围盒左上角到达 owner 区块内的 block-local (x, y)。组内子元素也可直接移动，其 left/top 仍相对所属区块而不是父组；Bridge 会先校验完整包围盒，越出 owner 区块时零写入拒绝。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3639,9 +3639,7 @@ async function callTool(name, args) {
       data = await driver.bridgeCall('updateElement', [args])
       break
     case 'editor_move_element':
-      data = await driver.bridgeCall('moveElements', [
-        { elementIds: [args.elementId], x: args.x, y: args.y }
-      ])
+      data = await driver.bridgeCall('moveElement', [args])
       break
     case 'editor_move_elements':
       data = await driver.bridgeCall('moveElements', [args])

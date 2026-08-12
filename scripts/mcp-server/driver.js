@@ -834,7 +834,7 @@ function mockResult(method, args = []) {
   switch (method) {
     case 'ping':
       return {
-        version: '1.10.0',
+        version: '1.11.0',
         editorType: 'content-editor',
         bookId: 'mock-book',
         mode: 'ai-control',
@@ -1433,7 +1433,6 @@ function mockResult(method, args = []) {
     case 'deleteBlock':
     case 'moveBlock':
     case 'deleteElement':
-    case 'moveElement':
     case 'resizeElement':
     case 'rotateElement':
     case 'duplicateElement':
@@ -1443,6 +1442,15 @@ function mockResult(method, args = []) {
     case 'redo':
     case 'save':
       return null
+    case 'moveElement':
+      return {
+        elementCount: 1,
+        x: arg.x,
+        y: arg.y,
+        dx: 0,
+        dy: 0,
+        coordinateSpace: 'block'
+      }
     case 'moveElements':
       return {
         elementCount: (arg.elementIds || []).length,

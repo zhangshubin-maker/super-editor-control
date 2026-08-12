@@ -1295,6 +1295,21 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
       dy: 0,
       coordinateSpace: 'block'
     })
+    const successfulCallLog = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_rpc_call',
+        arguments: { method: 'getMockCallLog', args: [] }
+      })
+    )
+    assert.ok(
+      successfulCallLog.some(
+        (call) =>
+          call.method === 'moveElement' &&
+          JSON.stringify(call.args) ===
+            JSON.stringify([{ elementId: 'el-1', x: 10, y: 20 }])
+      ),
+      'editor_move_element 应调用支持组内子元素的单元素 Bridge 方法'
+    )
     assert.equal(successfulResults.get('editor_move_elements').coordinateSpace, 'block')
     assert.equal(successfulResults.get('editor_set_element_spacing').coordinateSpace, 'block')
     assert.equal(successfulResults.get('editor_center_element_in_block').blockId, 'block-1')

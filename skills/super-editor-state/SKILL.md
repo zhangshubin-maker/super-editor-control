@@ -37,7 +37,7 @@ editor_search_elements({ keyword: "学习目标", type: "text" })
 目录/页面 slide
 └─ 区块 block（uuid/blockId）
    └─ 元素 element
-      └─ 组内 child_list（坐标相对组）
+      └─ 组内 child_list（子元素 `left/top` 仍是所属区块局部坐标）
 ```
 
 - 区块使用 uuid 作为画布 blockId；数字模块所需 `hypermedia_content_id` 是区块数据库 id，二者不能混用。

@@ -1,6 +1,9 @@
-# window.__superEditor 桥接 API 契约（v1.10.0）
+# window.__superEditor 桥接 API 契约（v1.11.0）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
+
+v1.11.0 放开单个组内子元素的直接移动：子元素 `left/top` 始终使用所属区块局部坐标，`moveElement`
+可递归定位目标并保持 owner bounds 预检；批量移动、对齐和间距仍保留顶层元素约束。
 
 v1.10.0 新增只读 `getSemanticSnapshot`，用于冻结当前书本内当前或指定普通目录的完整可编辑语义
 快照；保留原始区块/元素、定位索引、大纲、normalized+raw 数字模块、字体、可选富文本及上下文
@@ -176,7 +179,7 @@ v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为
 | `applyLibraryImage(payload)` | `{ imageId? or url?, blockId? or elementId?, scope?, left?, top?, width?, height?, name?, fixedRatio? }` | `{ imageId, url, elementId }`（新增或替换图片，并记录素材使用历史） |
 | `updateElement(payload)` | `{ elementId, patch }` | 无；patch 含 `left/top/x/y/width/height/rotate` 时先归一化数值并做 owner bounds 零写入预检；组元素拒绝直接通用几何更新 |
 | `deleteElement(elementId)` | string | 无 |
-| `moveElement(payload)` | `{ elementId, x, y }` | 无；owner-local 绝对坐标，有限值及 owner bounds 校验同 `updateElement` |
+| `moveElement(payload)` | `{ elementId, x, y }` | `{ elementCount: 1, x, y, dx, dy, coordinateSpace: block }`；支持组内子元素，`x/y` 是元素几何包围盒目标 `minX/minY`，坐标始终相对所属区块，并执行 owner bounds 预检 |
 | `resizeElement(payload)` | `{ elementId, width, height }` | 无；宽高必须为有限正数，并按缩放后的旋转包围盒做 owner 区块边界预检，组元素拒绝直接缩放 |
 | `rotateElement(payload)` | `{ elementId, angle }` | 无；角度必须为有限数，并按旋转后的真实包围盒做 owner 区块边界预检，组元素拒绝直接旋转 |
 | `duplicateElement(elementId)` | string | `{ elementId }`；递归换 id 后默认 +20/+20，候选副本越出 owner 区块时零写入拒绝 |
@@ -201,7 +204,7 @@ v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为
 
 布局坐标和写入边界遵循以下不变量：
 
-- `block` 坐标是元素所属区块的 owner-local 坐标；同一 `block` 计算必须来自同一 owner。
+- `block` 坐标是元素所属区块的 owner-local 坐标；同一 `block` 计算必须来自同一 owner。即使元素位于组内，子元素的 `left/top` 仍是所属区块局部坐标，不是相对父组的坐标；`groupId` 只表示结构归属。
 - `page` 坐标只用于计算和返回，Y 通过 `blockTemplateListTopMap[block.uuid]` 加上 owner-local Y；
   计算出的移动量最终仍写回各元素自己的 owner-local `left/top`。
 - 跨区块 `selection` 对齐必须显式传 `coordinateSpace: page`；`target: block` 只能用 `block`，
