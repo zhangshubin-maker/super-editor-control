@@ -86,6 +86,7 @@ node index.js
 | `editor_save_question_explanation` / `editor_delete_question_explanation` | 保存或删除 AI 讲解记录（即时写库） |
 | `editor_add_block` / `editor_update_block` / `editor_delete_block` | 区块编辑 |
 | `editor_add_element` / `editor_update_element` / `editor_delete_element` | 元素编辑 |
+| `editor_replace_block_safe` / `editor_replace_element_safe` | 完整 JSON 两阶段原位替换；保持递归 ID 与层级，保护数字模块锚点 |
 | `editor_text_info` / `editor_text_document` | 读取文本框摘要或带稳定索引的结构化富文本文档 |
 | `editor_text_set_style` / `editor_text_format` | 设置默认样式，或按全文/范围/匹配/段落应用可见格式 |
 | `editor_text_edit` | 局部插入、替换、删除或查找替换富文本 |
@@ -129,6 +130,9 @@ node index.js
 
 - 数字模块工具只接收元素 `elementId`；页面桥接负责从元素所属区块解析数据库数值 `id`
   作为 `hypermedia_content_id`，不会把区块 uuid 当成后端 id。
+- 安全 JSON 替换先保持 `dryRun=true` 读取 `changedPaths/expectedHash`，确认后用同一候选对象传
+  `dryRun=false + expectedHash`。任何 block/element id、类型、父子关系、顺序、templateId 或 groupId
+  变化都会零写入拒绝；`allowedPaths` 可进一步限制允许修改的字段前缀。
 - 新增、修改、删除和复制数字模块都直接请求后端并即时生效，不依赖 `editor_save`。
 - `editor_copy_digital_module` 与编辑器现有复制/粘贴行为一致：目标元素建立新关联，但复用同一个
   `model_id`，不是独立深克隆。

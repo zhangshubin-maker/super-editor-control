@@ -83,7 +83,7 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
     const initialized = await client.request('initialize', {
       protocolVersion: '2025-06-18'
     })
-    assert.equal(initialized.result.serverInfo.version, '0.9.0')
+    assert.equal(initialized.result.serverInfo.version, '0.10.0')
 
     const listed = await client.request('tools/list')
     const names = listed.result.tools.map((tool) => tool.name)
@@ -1168,7 +1168,9 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
       'editor_move_slide',
       'editor_move_block',
       'editor_replace_block',
+      'editor_replace_block_safe',
       'editor_copy_block_to_slide',
+      'editor_replace_element_safe',
       'editor_move_element',
       'editor_move_elements',
       'editor_resize_element',
@@ -1270,6 +1272,14 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
       ['editor_move_block', { blockId: 'block-1', toIndex: 0 }],
       ['editor_replace_block', { blockId: 'block-1', templateData: { template_type: 2 } }],
       [
+        'editor_replace_block_safe',
+        { blockId: 'block-1', templateData: { uuid: 'block-1', id: 1, template_type: 2 } }
+      ],
+      [
+        'editor_replace_element_safe',
+        { elementId: 'el-1', elementData: { id: 'el-1', type: 'text' } }
+      ],
+      [
         'editor_copy_block_to_slide',
         { blockId: 'block-1', targetSlideId: 'slide-2', index: 0 }
       ],
@@ -1287,6 +1297,17 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
         )
       )
     }
+    const missingSafeHash = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_replace_element_safe',
+        arguments: {
+          elementId: 'el-1',
+          elementData: { id: 'el-1', type: 'text' },
+          dryRun: false
+        }
+      })
+    )
+    assert.match(missingSafeHash.error, /expectedHash/)
     assert.deepEqual(successfulResults.get('editor_move_element'), {
       elementCount: 1,
       x: 10,

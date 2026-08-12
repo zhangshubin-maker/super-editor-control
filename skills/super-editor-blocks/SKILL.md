@@ -1,6 +1,6 @@
 ---
 name: super-editor-blocks
-description: 超媒编辑器区块操作技能。在需要新增、删除、复制、移动、重命名、调整尺寸、批量插入、替换或跨页复制当前课件区块时使用。负责区块结构，不直接修改区块内富文本；页面整体创作配合 super-editor-page-authoring，跨页制作配合 super-editor-book-authoring。
+description: 超媒编辑器区块操作技能。在需要新增、删除、复制、移动、重命名、调整尺寸、批量插入、结构性替换、保留 ID 的完整 JSON 原位替换或跨页复制当前课件区块时使用。负责区块结构，不直接修改区块内富文本；页面整体创作配合 super-editor-page-authoring，跨页制作配合 super-editor-book-authoring。
 ---
 
 # Super Editor Blocks
@@ -21,7 +21,8 @@ checkpoint、保存和立即持久化边界。
 | 更新名称或尺寸 | `editor_update_block` | `patch` 浅合并 |
 | 重命名 | `editor_rename_block` | 优先于通用 RPC |
 | 克隆当前页区块 | `editor_clone_block` | 生成新 blockId 和元素 id |
-| 移动/整体替换 | `editor_move_block` / `editor_replace_block` | 替换保留目标位置和 blockId |
+| 移动/结构性整体替换 | `editor_move_block` / `editor_replace_block` | 结构替换保留目标位置和 blockId，仍属于高风险写入 |
+| 保留身份的 JSON 替换 | `editor_replace_block_safe` | 两阶段原位替换，保持前后端区块 id 和递归元素身份 |
 | 跨页复制 | `editor_copy_block_to_slide` | dirty 源页显式先保存 |
 | 删除 | `editor_delete_block` | 删除区块及全部元素 |
 | 跨页导入 | `editor_import_blocks` | 目标页和模板数据必须明确 |
@@ -61,6 +62,11 @@ editor_move_block({ blockId: "block-uuid", toIndex: 3 })
 5. 多元素位置和内容适配交给 `super-editor-layout`；完整教学环节编排交给
    `super-editor-page-authoring`。
 6. 当前页 dirty 时按公共策略使用 `editor_save_verified(scope=current)`。
+
+完整区块 JSON 来自 `editor_export_slide`、仅需修改少量属性，并且挂在元素 id 上的数字模块关系必须保留时，
+优先使用 `editor_replace_block_safe`：先 dry-run，核对 `changedPaths`、`identityPreserved` 和
+`digitalModuleAnchorsPreserved`，再把返回的 `expectedHash` 用于正式写入。不要手工重建对象，不允许增删、
+重排或重编号元素；需要结构变化时改用显式区块/元素工具。
 
 同名不等于重复。删除前比较区块 id、文本、图片和元素结构；发生 `OUTCOME_UNKNOWN` 时先复读，
 禁止直接重放删除、替换或导入。

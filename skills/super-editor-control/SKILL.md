@@ -69,6 +69,8 @@ batch 中的 `method` 是 Bridge 方法名，这是 MCP 工具自身的参数，
 - dirty 切页默认 `editor_select_slide({ slideId, saveBeforeSwitch: true })`；丢弃必须来自用户明确要求。
 - 目录、大纲、目录题目、题目讲解和数字模块属于立即持久化域，页面 rollback 不能恢复。
 - 富文本禁止用 `editor_update_element.patch.content`，统一走 `editor_text_*`。
+- 只有从完整导出对象修改少量属性、必须保持数字模块锚点和复杂内部结构时，才使用
+  `editor_replace_block_safe/editor_replace_element_safe`；必须先 dry-run，再带 `expectedHash` 写入。
 - `editor_save_verified(scope=book)` 不会逐页保存整书。
 - `OUTCOME_UNKNOWN` 时先复读状态，禁止直接重放写操作。
 - 静态审计与截图不能证明教学正确、媒体可播放或学生端互动可用；必要时走专用工具和预览链路。

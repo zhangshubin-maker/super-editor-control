@@ -1,4 +1,4 @@
 interface:
   display_name: "Super Editor Elements"
-  short_description: "Manage element geometry, groups, and structure"
-  default_prompt: "Use $super-editor-elements to inspect and modify the requested element structure."
+  short_description: "Manage elements, groups, and identity-safe replacement"
+  default_prompt: "Use $super-editor-elements to modify elements or safely replace an exported element tree while preserving every ID anchor."

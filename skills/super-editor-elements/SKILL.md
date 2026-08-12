@@ -1,6 +1,6 @@
 ---
 name: super-editor-elements
-description: 超媒编辑器通用元素操作技能。用户要求新增、删除、复制、移动、缩放、旋转、对齐、分布、调整层级、打组或解组画布元素时使用；表格和思维导图的结构操作也由本技能路由。文本内容、富文本格式和文本框适配改用 super-editor-text，完整页面编排改用 super-editor-page-authoring，系统性布局调整配合 super-editor-layout。
+description: 超媒编辑器通用元素操作技能。用户要求新增、删除、复制、移动、缩放、旋转、对齐、分布、调整层级、打组、解组，或对普通元素/组元素树进行保留 ID 的完整 JSON 原位替换时使用；表格和思维导图的结构操作也由本技能路由。文本内容、富文本格式和文本框适配改用 super-editor-text，完整页面编排改用 super-editor-page-authoring，系统性布局调整配合 super-editor-layout。
 ---
 
 # Super Editor Elements
@@ -26,6 +26,7 @@ description: 超媒编辑器通用元素操作技能。用户要求新增、删�
 | 搜索元素 | `editor_search_elements` | 按当前页名称、内容、类型或区块缩小目标 |
 | 新增 | `editor_add_element` | 传 `blockId/type/payload` |
 | 修改通用属性 | `editor_update_element` | 几何、通用样式、非富文本字段 |
+| 保留身份的完整替换 | `editor_replace_element_safe` | 普通元素或组元素树的两阶段 JSON 原位替换 |
 | 精确移动/缩放/旋转 | `editor_move_element` / `editor_resize_element` / `editor_rotate_element` | 单元素 typed 操作；移动支持组内子元素，无需解组 |
 | 删除 | `editor_delete_element` | 删除前按公共策略判断风险 |
 | 批量复制 | `editor_duplicate_elements` | 支持偏移量 |
@@ -87,6 +88,11 @@ editor_text_edit({
 3. 优先使用专用 MCP 工具；只有工具表没有覆盖的方法才使用 `editor_rpc_call`。
 4. 复读受影响元素。尺寸或位置变化时加载 `super-editor-layout` 检查边界、对齐和遮挡。
 5. 当前页 dirty 时按公共策略调用 `editor_save_verified(scope=current)`。
+
+从 `editor_get_element` 取得完整对象、只修改少量属性，且逐项 typed 调用会破坏完整富文本/组树往返时，
+使用 `editor_replace_element_safe`。先 dry-run 核对差异路径，再带 `expectedHash` 写入；Bridge 会强制保持
+根元素和全部子元素的 id、type、templateId、groupId、父子关系及顺序，因此数字模块锚点不会脱钩。
+它不是结构迁移工具，增删子元素或重新打组仍使用对应 typed 工具。
 
 新增元素后以工具返回的 `elementId` 为准，不猜生成 id；删除或批量操作发生
 `OUTCOME_UNKNOWN` 时先读取目标，禁止直接重放。

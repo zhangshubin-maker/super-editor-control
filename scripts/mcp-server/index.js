@@ -9,7 +9,7 @@ import {
   persistSemanticSnapshot
 } from './semanticSnapshotFile.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.9.0' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.10.0' }
 
 const ID_SCHEMA = { type: ['string', 'number'] }
 const ID_LIST_SCHEMA = {
@@ -959,6 +959,37 @@ const TOOLS = [
     }
   },
   {
+    name: 'editor_replace_block_safe',
+    description: '用完整区块 JSON 原位替换当前页目标区块。先 dry-run 返回差异和 expectedHash；正式写入必须回传 expectedHash。强制保持前端 blockId、后端区块 id、全部 elementId、元素类型、父子关系和顺序不变，从而保持数字模块锚点。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockId: { type: 'string', minLength: 1 },
+        templateData: {
+          type: 'object',
+          minProperties: 1,
+          additionalProperties: true,
+          description: '从 editor_export_slide 取得并仅修改少量属性的完整区块对象'
+        },
+        dryRun: { type: 'boolean', default: true },
+        expectedHash: {
+          type: 'string',
+          pattern: '^fnv1a32:[a-f0-9]{8}$',
+          description: '正式写入时必填；使用同一候选 JSON 的 dry-run 返回值'
+        },
+        allowedPaths: {
+          type: 'array',
+          maxItems: 200,
+          items: { type: 'string', minLength: 1 },
+          description: '可选 JSON 路径前缀白名单；省略表示身份字段之外均可改'
+        },
+        maxChangedPaths: { type: 'integer', minimum: 1, maximum: 2000, default: 200 }
+      },
+      required: ['blockId', 'templateData'],
+      additionalProperties: false
+    }
+  },
+  {
     name: 'editor_copy_block_to_slide',
     description:
       '把当前页区块复制到目标目录。跨页且当前页 dirty 时应使用 saveBeforeSwitch；discardChanges 不会用于复制 dirty 源，避免复制语义不明确。',
@@ -1042,6 +1073,37 @@ const TOOLS = [
         y: { type: 'number', description: '区块内纵坐标' }
       },
       required: ['elementId', 'x', 'y'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'editor_replace_element_safe',
+    description: '用完整元素 JSON 原位替换普通元素或整棵组元素树。先 dry-run 返回差异和 expectedHash；正式写入必须回传 expectedHash。强制保持根元素及全部子元素 id、类型、父子关系、顺序、templateId 和 groupId 不变，从而保持数字模块锚点。elementData 可直接使用 editor_get_element 的结果。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elementId: { type: 'string', minLength: 1 },
+        elementData: {
+          type: 'object',
+          minProperties: 1,
+          additionalProperties: true,
+          description: '从 editor_get_element 取得并仅修改少量属性的完整元素对象'
+        },
+        dryRun: { type: 'boolean', default: true },
+        expectedHash: {
+          type: 'string',
+          pattern: '^fnv1a32:[a-f0-9]{8}$',
+          description: '正式写入时必填；使用同一候选 JSON 的 dry-run 返回值'
+        },
+        allowedPaths: {
+          type: 'array',
+          maxItems: 200,
+          items: { type: 'string', minLength: 1 },
+          description: '可选 JSON 路径前缀白名单，例如 content 或 child_list[0].left'
+        },
+        maxChangedPaths: { type: 'integer', minimum: 1, maximum: 2000, default: 200 }
+      },
+      required: ['elementId', 'elementData'],
       additionalProperties: false
     }
   },
@@ -2263,6 +2325,7 @@ const WORKING_COPY_TOOL_NAMES = new Set([
   'editor_clone_block',
   'editor_move_block',
   'editor_replace_block',
+  'editor_replace_block_safe',
   'editor_copy_block_to_slide',
   'editor_update_block',
   'editor_delete_block',
@@ -2270,6 +2333,7 @@ const WORKING_COPY_TOOL_NAMES = new Set([
   'editor_import_blocks',
   'editor_add_element',
   'editor_update_element',
+  'editor_replace_element_safe',
   'editor_move_element',
   'editor_move_elements',
   'editor_resize_element',
@@ -3055,9 +3119,11 @@ function validateCoreToolArgs(name, args = {}) {
     editor_move_slide: ['slideId'],
     editor_move_block: ['blockId'],
     editor_replace_block: ['blockId'],
+    editor_replace_block_safe: ['blockId'],
     editor_copy_block_to_slide: ['blockId', 'targetSlideId'],
     editor_update_block: ['blockId'],
     editor_update_element: ['elementId'],
+    editor_replace_element_safe: ['elementId'],
     editor_move_element: ['elementId'],
     editor_resize_element: ['elementId'],
     editor_rotate_element: ['elementId'],
@@ -3170,8 +3236,22 @@ function validateCoreToolArgs(name, args = {}) {
   if (['editor_update_block', 'editor_update_element'].includes(name)) {
     requirePlainObject(args.patch, 'patch', { nonEmpty: true })
   }
-  if (name === 'editor_replace_block') {
+  if (['editor_replace_block', 'editor_replace_block_safe'].includes(name)) {
     requirePlainObject(args.templateData, 'templateData', { nonEmpty: true })
+  }
+  if (name === 'editor_replace_element_safe') {
+    requirePlainObject(args.elementData, 'elementData', { nonEmpty: true })
+  }
+  if (['editor_replace_block_safe', 'editor_replace_element_safe'].includes(name)) {
+    if (args.dryRun === false) requireNonEmptyString(args.expectedHash, 'expectedHash')
+    if (hasOwn(args, 'allowedPaths')) {
+      if (!Array.isArray(args.allowedPaths) || !args.allowedPaths.length) {
+        throw new Error(`${name}.allowedPaths 必须是非空字符串数组`)
+      }
+      args.allowedPaths.forEach((path, index) =>
+        requireNonEmptyString(path, `allowedPaths[${index}]`)
+      )
+    }
   }
 
   if (['editor_move_slide', 'editor_move_block'].includes(name)) {
@@ -3621,6 +3701,9 @@ async function callTool(name, args) {
     case 'editor_replace_block':
       data = await driver.bridgeCall('replaceBlock', [args.blockId, args.templateData])
       break
+    case 'editor_replace_block_safe':
+      data = await driver.bridgeCall('replaceBlockSafe', [args])
+      break
     case 'editor_copy_block_to_slide':
       await prepareCrossPageBlockCopy(args)
       data = await driver.bridgeCall('copyBlockToSlide', [
@@ -3637,6 +3720,9 @@ async function callTool(name, args) {
       break
     case 'editor_update_element':
       data = await driver.bridgeCall('updateElement', [args])
+      break
+    case 'editor_replace_element_safe':
+      data = await driver.bridgeCall('replaceElementSafe', [args])
       break
     case 'editor_move_element':
       data = await driver.bridgeCall('moveElement', [args])

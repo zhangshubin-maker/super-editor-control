@@ -834,7 +834,7 @@ function mockResult(method, args = []) {
   switch (method) {
     case 'ping':
       return {
-        version: '1.11.0',
+        version: '1.12.0',
         editorType: 'content-editor',
         bookId: 'mock-book',
         mode: 'ai-control',

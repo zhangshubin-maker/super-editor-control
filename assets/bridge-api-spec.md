@@ -1,6 +1,10 @@
-# window.__superEditor 桥接 API 契约（v1.11.0）
+# window.__superEditor 桥接 API 契约（v1.12.0）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
+
+v1.12.0 新增保留身份的区块/元素树安全替换：先 dry-run 取得字段差异与 `expectedHash`，正式写入时
+强制保持 block/element id、元素类型、父子关系和顺序不变。数字模块以 element id 为关联锚点，任何
+身份变化都在首个写入前拒绝。
 
 v1.11.0 放开单个组内子元素的直接移动：子元素 `left/top` 始终使用所属区块局部坐标，`moveElement`
 可递归定位目标并保持 owner bounds 预检；批量移动、对齐和间距仍保留顶层元素约束。
@@ -153,6 +157,7 @@ v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为
 | `insertBlocks(blocks, opts?)` | `(模板数组, { index? })` | `{ blockIds }`（批量插入，uuid 自动重新生成，元素 id 冲突自动替换） |
 | `importBlocks(slideId, blocks, opts?)` | `(string, 模板数组, { index?, saveBeforeSwitch?, discardChanges? })` | `{ slideId, blockIds }`；目标不是当前页时先按 dirty 安全选项切换，再插入 |
 | `replaceBlock(blockId, templateData)` | (string, 模板对象) | `{ blockId }`；整体替换内容并保持目标位置与原 block uuid，保留传入 element id；写前拒绝模板内部重复 id 及与其他区块的 id 冲突 |
+| `replaceBlockSafe(payload)` | `{ blockId, templateData, dryRun?, expectedHash?, allowedPaths?, maxChangedPaths? }` | 保留身份的完整 JSON 原位替换；默认 dry-run，正式写入必须回传 `expectedHash`；强制保持前端 uuid、后端区块 id、全部 element id/类型/父子关系/顺序/templateId/groupId 不变，返回差异路径和 `digitalModuleAnchorsPreserved: true` |
 | `renameBlock(blockId, name)` | (string, string) | 无 |
 | `copyBlockToSlide(blockId, targetSlideId, opts?)` | `(string, string, { index?, saveBeforeSwitch?, discardChanges? })` | `{ slideId, blockIds }`；跨页复制 dirty 源页只允许先保存，明确拒绝一边复制未保存源内容一边丢弃 |
 | `insertTemplate(templateData, index?)` | 模板结构对象 + 插入位置（省略追加末尾） | `{ blockId }`；作为**新区块**插入，统一重建 block uuid 和全部 element id，并同步子级 groupId/templateId，不保留源 id |
@@ -178,6 +183,7 @@ v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为
 | `addElement(payload)` | `{ blockId, type, payload }` | `{ elementId }`；省略位置时按 **owner 区块尺寸**居中，不使用整页 viewport；统一重建传入元素树 id 并在写入前校验有限几何和 owner bounds |
 | `applyLibraryImage(payload)` | `{ imageId? or url?, blockId? or elementId?, scope?, left?, top?, width?, height?, name?, fixedRatio? }` | `{ imageId, url, elementId }`（新增或替换图片，并记录素材使用历史） |
 | `updateElement(payload)` | `{ elementId, patch }` | 无；patch 含 `left/top/x/y/width/height/rotate` 时先归一化数值并做 owner bounds 零写入预检；组元素拒绝直接通用几何更新 |
+| `replaceElementSafe(payload)` | `{ elementId, elementData, dryRun?, expectedHash?, allowedPaths?, maxChangedPaths? }` | 保留身份的普通元素或组元素树完整 JSON 原位替换；`elementData` 可直接使用 `getElement` 结果；强制保持整棵树的 id、类型、父子关系、顺序、templateId/groupId，写后 hash 回读不一致时回滚 |
 | `deleteElement(elementId)` | string | 无 |
 | `moveElement(payload)` | `{ elementId, x, y }` | `{ elementCount: 1, x, y, dx, dy, coordinateSpace: block }`；支持组内子元素，`x/y` 是元素几何包围盒目标 `minX/minY`，坐标始终相对所属区块，并执行 owner bounds 预检 |
 | `resizeElement(payload)` | `{ elementId, width, height }` | 无；宽高必须为有限正数，并按缩放后的旋转包围盒做 owner 区块边界预检，组元素拒绝直接缩放 |
@@ -205,6 +211,10 @@ v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为
 布局坐标和写入边界遵循以下不变量：
 
 - `block` 坐标是元素所属区块的 owner-local 坐标；同一 `block` 计算必须来自同一 owner。即使元素位于组内，子元素的 `left/top` 仍是所属区块局部坐标，不是相对父组的坐标；`groupId` 只表示结构归属。
+- 安全 JSON 替换必须使用同一候选对象执行两次：第一次保持 `dryRun=true`，第二次传
+  `dryRun=false + expectedHash`。`allowedPaths` 是 JSON 路径前缀白名单，`maxChangedPaths` 默认 200。
+  这两个工具允许完整富文本/组树一起往返，但不允许借机新增、删除、重排或重编号元素；结构迁移继续使用
+  新增、删除、打组、解组、导入等显式工具。
 - `page` 坐标只用于计算和返回，Y 通过 `blockTemplateListTopMap[block.uuid]` 加上 owner-local Y；
   计算出的移动量最终仍写回各元素自己的 owner-local `left/top`。
 - 跨区块 `selection` 对齐必须显式传 `coordinateSpace: page`；`target: block` 只能用 `block`，
@@ -577,7 +587,8 @@ HTML 完全一致，或 Quill 文档的文本顺序、有效样式、内嵌对�
 - 高频只读入口优先使用 `getState`、`getCanvasTree`、`listBlocks`、`getBlock`、`getElement`、
   `getElementsBounds`，不要为一个局部目标先导出整页。页面操作使用
   `selectSlide/addSlide/deleteSlide/moveSlide/exportSlide/replaceSlideContent`；区块操作使用
-  `addBlock/cloneBlock/updateBlock/moveBlock/importBlocks/copyBlockToSlide/replaceBlock/deleteBlock`。
+  `addBlock/cloneBlock/updateBlock/moveBlock/importBlocks/copyBlockToSlide/replaceBlock/replaceBlockSafe/deleteBlock`；
+  完整元素树原位替换使用 `replaceElementSafe`。
 - 视图定位使用 `scrollToBlock/scrollToElement/fitCanvas/getViewport`；它们不修改课件内容。
   `getElementsBounds(ids, { coordinateSpace: 'page' })` 才是跨区块几何的标准入口，不要自行猜测区块累计高度。
 

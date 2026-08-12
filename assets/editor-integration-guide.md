@@ -91,6 +91,8 @@ src/modules/contentEditor/aiControl/
 | `moveBlock(payload)` | `dispatch('contentEditorSlides/moveBlockTemplate', { fromIndex, toIndex })`（fromIndex 由 uuid 换算） |
 | `addElement(payload)` | `dispatch('contentEditorSlides/addElement', element)`；element 结构参考《元素结构说明文档》，必填 `id`/`type`/`templateId`/`groupId=0` |
 | `updateElement(payload)` | `dispatch('contentEditorSlides/updateElement', { eid: elementId, ...patch })`（参数形态以现有调用为准，见 store 内 `updateElement` 消费方式） |
+| `replaceBlockSafe(payload)` | 复用 `aiControl/blockMethods.js`：先比较完整区块身份和 hash，正式写入沿用原区块位置的 delete+insert，并在失败时恢复区块列表快照 |
+| `replaceElementSafe(payload)` | 复用 `aiControl/elementMethods.js`：比较递归元素身份和 hash，把候选对象的变更顶层字段交给现有 `updateElement` action，写后 hash 不一致时恢复原字段 |
 | `deleteElement(elementId)` | `dispatch('contentEditorSlides/deleteElement', elementId)` |
 | `moveElement/resizeElement/rotateElement` | 先取元素对象，再 `dispatch('contentEditorSlides/updateElement', {...})` 合并坐标/尺寸/角度 |
 | `duplicateElement(id)` | 参考现有复制/粘贴逻辑（`replaceElementsId` + `addElement`） |

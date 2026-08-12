@@ -123,6 +123,11 @@ owner 区块时零写入拒绝。精确间距和区块坐标 bounds 只接受同
 `editor_create_digital_module(replaceExisting=true)` 仍是受支持的创建/替换入口，由 Bridge 携带已有关系
 标识一次提交，不先删除旧模块。
 
+完整导出 JSON 只需修改少量属性时，使用 `editor_replace_block_safe` 或
+`editor_replace_element_safe`。两者先 dry-run 返回差异路径与 `expectedHash`，正式写入必须回传该 hash；
+区块、普通元素和组元素树的全部身份字段、父子关系及顺序保持不变，因此挂在 element id 上的数字模块
+关系不会脱钩。结构新增、删除或重排仍使用显式 typed 工具。
+
 ## 题目能力
 
 - 用 `editor_list_question_paths` 和 `editor_get_question_search_options` 获取真实路径与筛选字典。

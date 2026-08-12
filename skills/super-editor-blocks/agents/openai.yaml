@@ -1,4 +1,4 @@
 interface:
   display_name: "Super Editor Blocks"
-  short_description: "Create, copy, reorder, and manage page blocks"
-  default_prompt: "Use $super-editor-blocks to manage the requested current-page blocks safely."
+  short_description: "Manage blocks and identity-safe JSON replacement"
+  default_prompt: "Use $super-editor-blocks to manage blocks or safely replace exported block JSON while preserving every identity anchor."
