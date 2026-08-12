@@ -45,7 +45,16 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
 
 `editor_status` 是只读检查，不会长期占用页面。`editor_connect` 仅用于主动重新选择页面。
 
-`editor_jump_to_book(target=current)` 在 Bridge v1.9.0 中优先原页面热切书：RPC 的
+`editor_export_semantic_snapshot({ slideId?, richText? })` 可以在不切页、不跨书、不写业务库的前提下，
+把当前连接书本的目标普通目录冻结为完整可编辑语义快照：原始区块与元素、稳定定位索引、大纲、
+normalized+raw 数字模块、字体、富文本和工作副本/持久态。默认 `richText=deep`；MCP 把完整 Bridge
+envelope 按内容寻址保存到系统临时目录，分别返回文件 SHA-256 与 Bridge 稳定 hash。
+只有 `fullFidelity=true` 才适合作为完整语义化生成依据；部分读取会携带 completeness warnings，旧
+Bridge 则明确报不支持，不会回退到丢失样式和布局的摘要。
+MCP 会按 Bridge 契约复算内容稳定 hash，并使用私有权限的受控临时目录；不接受调用方任意输出路径，
+也拒绝符号链接和非普通文件目标。多进程导出相同内容时共享同一个内容寻址文件并核对最终 hash。
+
+`editor_jump_to_book(target=current)` 在 Bridge v1.9.0+ 中优先原页面热切书：RPC 的
 `instanceId/windowId` 保持不变，MCP 等待目标 `bookId`、`contextEpoch` 和内容状态一致后再返回；
 普通目录要求 `contentReady=true`，空书和 PDF 占位目录通过显式状态安全放行。
 插件仍兼容 v1.8.2 的完整刷新式 Bridge；刷新兜底会排除旧 `instanceId`，只接回同一 `windowId` 下真正的新实例，不会误连旧页或其他已打开书本。
@@ -67,8 +76,9 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
 - `editor_audit_content` 默认只检查当前目录；整书审计必须显式 `scope=book`，并通过
   `cursor/limit` 分批检查结构、文本、资源和布局。
 
-设计新目录时，先搜索本书样章模板和区块模板，从成熟内容中参考版式、字体、色彩、间距和区块结构，
-再填充当前教学内容。不要因为一次文字或元素小修改而先构建整书 manifest。
+设计新目录时，默认先搜索本书样章模板和区块模板；需要模板中心时显式选择超媒交互型或界面交互型，
+再按模板 id 读取详情并应用，从成熟内容中参考版式、字体、色彩、间距和区块结构。不要因为一次文字或
+元素小修改而先构建整书 manifest。
 
 ## MCP 写入边界与高频编辑入口
 

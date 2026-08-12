@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const SERVER_PATH = fileURLToPath(new URL('../index.js', import.meta.url))
@@ -82,7 +83,7 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
     const initialized = await client.request('initialize', {
       protocolVersion: '2025-06-18'
     })
-    assert.equal(initialized.result.serverInfo.version, '0.8.1')
+    assert.equal(initialized.result.serverInfo.version, '0.9.0')
 
     const listed = await client.request('tools/list')
     const names = listed.result.tools.map((tool) => tool.name)
@@ -96,6 +97,7 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
       'editor_update_digital_module',
       'editor_delete_digital_module',
       'editor_copy_digital_module',
+      'editor_export_semantic_snapshot',
       'editor_list_question_paths',
       'editor_get_question_search_options',
       'editor_search_questions',
@@ -112,6 +114,16 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
       'editor_delete_question_explanation'
     ]
     expected.forEach((name) => assert.ok(names.includes(name), `缺少工具 ${name}`))
+
+    const semanticSnapshotTool = listed.result.tools.find(
+      (tool) => tool.name === 'editor_export_semantic_snapshot'
+    )
+    assert.deepEqual(semanticSnapshotTool.inputSchema.properties.slideId.type, ['string', 'number'])
+    assert.deepEqual(semanticSnapshotTool.inputSchema.properties.richText.enum, [
+      'none',
+      'summary',
+      'deep'
+    ])
 
     const searchTool = listed.result.tools.find((tool) => tool.name === 'editor_search_questions')
     assert.deepEqual(searchTool.inputSchema.properties.scope.enum, [
@@ -198,6 +210,52 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
     assert.equal(switched.contentReady, true)
     assert.equal(switched.currentSlidePlaceholder, false)
     assert.equal(switched.emptyBook, false)
+
+    const semanticSnapshot = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_export_semantic_snapshot',
+        arguments: { slideId: '2002', richText: 'deep' }
+      })
+    )
+    assert.match(semanticSnapshot.snapshotFileSha256, /^sha256:[a-f0-9]{64}$/)
+    assert.match(semanticSnapshot.snapshotStableHash, /^sha256:[a-f0-9]{64}$/)
+    assert.equal(semanticSnapshot.snapshotStableHashAuthority, 'bridge:getSemanticSnapshot/v1')
+    assert.equal(semanticSnapshot.snapshotStableHashVerified, true)
+    assert.equal(semanticSnapshot.identity.catalogId, '2002')
+    assert.equal(semanticSnapshot.state.source, 'persisted')
+    assert.equal(semanticSnapshot.completeness.complete, true)
+    assert.equal(semanticSnapshot.meta.digitalModuleCount, 1)
+    const semanticSnapshotJson = JSON.parse(
+      readFileSync(semanticSnapshot.snapshotPath, 'utf8')
+    )
+    assert.equal(semanticSnapshotJson.snapshot.identity.catalogName, '目录 2002')
+    assert.equal(
+      semanticSnapshotJson.snapshot.blocks[0].template_data_content.elements[0].content,
+      '<p>示例文本</p>'
+    )
+    assert.equal(semanticSnapshotJson.snapshot.digitalModules.items[0].raw.model_id, 991)
+    assert.equal(semanticSnapshotJson.snapshot.richText.items[0].runs[0].formats.bold, true)
+
+    const semanticSnapshotDefault = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_export_semantic_snapshot',
+        arguments: {}
+      })
+    )
+    const semanticSnapshotDefaultJson = JSON.parse(
+      readFileSync(semanticSnapshotDefault.snapshotPath, 'utf8')
+    )
+    assert.equal(semanticSnapshotDefaultJson.snapshot.richText.detail, 'deep')
+
+    for (const slideId of [0, -1, 'not-an-id']) {
+      const invalidSlideId = readToolError(
+        await client.request('tools/call', {
+          name: 'editor_export_semantic_snapshot',
+          arguments: { slideId }
+        })
+      )
+      assert.match(invalidSlideId.error, /slideId 必须是正整数 id/)
+    }
 
     const uploaded = readToolData(
       await client.request('tools/call', {
@@ -581,6 +639,39 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
       })
     )
     assert.match(existingExplanationIdError.error, /id 必须是正整数/)
+  } finally {
+    await client.close()
+  }
+})
+
+test('semantic snapshot 对旧 Bridge 明确报不支持，不拼装摘要降级', async () => {
+  const client = createMockClient({ SUPER_EDITOR_MOCK_SEMANTIC_SNAPSHOT_UNSUPPORTED: '1' })
+  try {
+    const response = await client.request('tools/call', {
+      name: 'editor_export_semantic_snapshot',
+      arguments: { richText: 'deep' }
+    })
+    const error = readToolError(response)
+    assert.equal(error.errorCode, 'SEMANTIC_SNAPSHOT_UNSUPPORTED')
+    assert.match(error.error, /不支持 getSemanticSnapshot.*升级到 v1\.10\.0\+/)
+  } finally {
+    await client.close()
+  }
+})
+
+test('semantic snapshot 对部分读取结果保留诊断并明确 fullFidelity=false', async () => {
+  const client = createMockClient({ SUPER_EDITOR_MOCK_SEMANTIC_SNAPSHOT_INCOMPLETE: '1' })
+  try {
+    const result = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_export_semantic_snapshot',
+        arguments: { richText: 'deep' }
+      })
+    )
+    assert.equal(result.fullFidelity, false)
+    assert.equal(result.completeness.complete, false)
+    assert.equal(result.completeness.sections.richText, false)
+    assert.equal(result.completeness.warnings[0].code, 'MOCK_SECTION_INCOMPLETE')
   } finally {
     await client.close()
   }
@@ -1014,6 +1105,62 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
     assert.match(byName.get('editor_set_zoom').description, /^\[仅视图状态\|不写库\]/)
     assert.match(byName.get('editor_undo').description, /已禁用/)
     assert.match(byName.get('editor_redo').description, /已禁用/)
+
+    const searchTemplates = byName.get('editor_search_templates').inputSchema
+    assert.deepEqual(searchTemplates.properties.scope.enum, ['book', 'center'])
+    assert.deepEqual(searchTemplates.properties.interactionType.enum, [
+      'hypermedia',
+      'interface'
+    ])
+    assert.equal(searchTemplates.properties.pageNo.minimum, 0)
+    assert.equal(searchTemplates.properties.pageSize.minimum, 1)
+    assert.equal(searchTemplates.properties.pageSize.maximum, 100)
+
+    const centerTemplates = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_search_templates',
+        arguments: {
+          scope: 'center',
+          kind: 'chapter',
+          interactionType: 'interface',
+          query: '作文不难'
+        }
+      })
+    )
+    assert.equal(centerTemplates[0].scope, 'center')
+    assert.equal(centerTemplates[0].suitType, 2)
+    assert.equal(centerTemplates[0].interactionType, 'interface')
+
+    const centerTemplateDetail = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_get_template',
+        arguments: { templateId: centerTemplates[0].id }
+      })
+    )
+    assert.equal(centerTemplateDetail.id, centerTemplates[0].id)
+    assert.equal(centerTemplateDetail.kind, 'chapter')
+    assert.equal(centerTemplateDetail.interactionType, 'interface')
+
+    const appliedCenterTemplate = readToolData(
+      await client.request('tools/call', {
+        name: 'editor_apply_template',
+        arguments: {
+          kind: 'chapter',
+          templateId: centerTemplates[0].id,
+          name: '模板中心样章目录',
+          discardChanges: true
+        }
+      })
+    )
+    assert.match(appliedCenterTemplate.slideId, /^mock-slide-/)
+
+    const missingCenterInteractionType = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_search_templates',
+        arguments: { scope: 'center', kind: 'chapter' }
+      })
+    )
+    assert.match(missingCenterInteractionType.error, /必须指定 interactionType/)
 
     const typedNames = [
       'editor_add_slide',

@@ -4,8 +4,12 @@
 import { createInterface } from 'node:readline'
 import * as driver from './driver.js'
 import { BOOK_AUTHORING_TOOLS, prepareBookAuthoringCall } from './bookAuthoring.js'
+import {
+  normalizeSemanticSnapshotBridgeError,
+  persistSemanticSnapshot
+} from './semanticSnapshotFile.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.8.1' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.9.0' }
 
 const ID_SCHEMA = { type: ['string', 'number'] }
 const ID_LIST_SCHEMA = {
@@ -267,14 +271,24 @@ const TOOLS = [
   ...BOOK_AUTHORING_TOOLS,
   {
     name: 'editor_search_templates',
-    description: '搜索本书当前可用模板。kind=chapter 搜索样章模板（可直接用于新增目录），kind=block 搜索区块模板（可插入当前页）。返回模板 id、名称、封面和分类信息。',
+    description: '搜索本书或模板中心的模板。scope=book（默认）搜索本书当前可用模板；scope=center 搜索模板中心且必须用 interactionType 指定超媒/界面交互型。kind=chapter 搜索样章模板，kind=block 搜索区块模板。返回模板 id、名称、适配类型、封面和分类信息。',
     inputSchema: {
       type: 'object',
       properties: {
+        scope: {
+          type: 'string',
+          enum: ['book', 'center'],
+          description: '搜索范围，默认 book；center 不附带当前 book_id'
+        },
         kind: { type: 'string', enum: ['chapter', 'block'], description: '模板种类，默认 chapter' },
+        interactionType: {
+          type: 'string',
+          enum: ['hypermedia', 'interface'],
+          description: '模板适配类型；scope=center 时必填。hypermedia 映射 suit_type=1，interface 映射 suit_type=2'
+        },
         query: { type: 'string', description: '模板名称关键词' },
-        pageNo: { type: 'number', description: '页码，从 0 开始，默认 0' },
-        pageSize: { type: 'number', description: '每页数量，默认 50' },
+        pageNo: { type: 'integer', minimum: 0, description: '页码，从 0 开始，默认 0' },
+        pageSize: { type: 'integer', minimum: 1, maximum: 100, description: '每页数量，默认 50' },
         classifyId: { type: ['string', 'number'], description: '模板分类 id' },
         parentId: { type: ['string', 'number'], description: '父模板 id；搜索样章下属区块时使用' },
         timeSort: { type: 'number', description: '时间排序，默认 2' }
@@ -284,7 +298,7 @@ const TOOLS = [
   },
   {
     name: 'editor_get_template',
-    description: '读取样章/区块模板详情及模板内容，供应用前理解其结构与素材。parseContent 默认 true，会尽量把 content JSON 解析为对象。',
+    description: '根据模板 id 读取本书或模板中心的样章/区块详情及完整模板内容，供应用前理解其结构与素材。parseContent 默认 true，会尽量把 content JSON 解析为对象。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -297,7 +311,7 @@ const TOOLS = [
   },
   {
     name: 'editor_apply_template',
-    description: '应用模板：kind=chapter 时按样章模板新增并选中目录（立即写库）；kind=block 时把区块模板插入当前页工作副本，完成后用 editor_save_verified(scope=current) 保存并回读。',
+    description: '应用 editor_search_templates/editor_get_template 返回的模板 id：kind=chapter 时按样章模板新增并选中目录（立即写库）；kind=block 时把区块模板插入当前页工作副本，完成后用 editor_save_verified(scope=current) 保存并回读。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1588,6 +1602,27 @@ const TOOLS = [
     }
   },
   {
+    name: 'editor_export_semantic_snapshot',
+    description:
+      '只读冻结当前连接书本中当前或指定普通目录的完整可编辑语义快照：原始区块/元素、稳定元素定位索引、大纲、normalized+raw 数字模块、字体与可选富文本结构。结果按内容寻址写入系统临时目录并返回绝对 snapshotPath、文件 SHA-256、Bridge 内容稳定 hash、完整度与工作副本/持久态信息；不切页、不跨书、不写业务库。需要 Bridge v1.10.0+ 的 getSemanticSnapshot，旧 Bridge 不会用摘要数据伪装降级。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slideId: {
+          type: ['string', 'number'],
+          description: '当前书本内的正整数普通目录 id；省略为当前目录'
+        },
+        richText: {
+          type: 'string',
+          enum: ['none', 'summary', 'deep'],
+          description:
+            '富文本读取深度，默认 deep；summary 保留文本身份、正文、默认样式、布局和 hash，none 不展开富文本结构'
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
     name: 'editor_text_set_content',
     description: '整段替换文本内容。纯文本自动包 <p>，换行自动拆段；expectedContentHash 防并发覆盖，dryRun 只预览。实际写入且 fitSize=true 时按 background.extendType 重算宽高并联动同组元素。局部修改优先用 editor_text_edit。',
     inputSchema: {
@@ -2306,6 +2341,7 @@ const SPECIAL_TOOL_DESCRIPTION_TAGS = {
   editor_status: '[连接状态|不写库]',
   editor_connect: '[连接状态|不写库]',
   editor_jump_to_book: '[导航|改变编辑器上下文|不写库]',
+  editor_export_semantic_snapshot: '[只读导出本机临时 JSON|不写业务库]',
   editor_checkpoint: '[会话内快照|不写库]',
   editor_list_checkpoints: '[会话内快照|不写库]',
   editor_clear_checkpoints: '[会话内快照|不写库]',
@@ -3002,6 +3038,17 @@ function validateExactOne(args, fields, toolName) {
 }
 
 function validateCoreToolArgs(name, args = {}) {
+  if (name === 'editor_export_semantic_snapshot') {
+    if (hasOwn(args, 'slideId')) {
+      requireTextTargetId(args.slideId, 'slideId')
+      if (!/^[1-9]\d*$/.test(String(args.slideId).trim())) {
+        throw new Error('slideId 必须是正整数 id')
+      }
+    }
+    if (hasOwn(args, 'richText') && !['none', 'summary', 'deep'].includes(args.richText)) {
+      throw new Error('richText 取值: none / summary / deep')
+    }
+  }
   const requiredStringFields = {
     editor_select_slide: ['slideId'],
     editor_delete_slide: ['slideId'],
@@ -3021,6 +3068,38 @@ function validateCoreToolArgs(name, args = {}) {
   }
   for (const field of requiredStringFields[name] || []) {
     requireNonEmptyString(args[field], field)
+  }
+
+  if (name === 'editor_search_templates') {
+    const scope = args.scope || 'book'
+    if (!['book', 'center'].includes(scope)) {
+      throw new Error('editor_search_templates.scope 取值: book / center')
+    }
+    if (hasOwn(args, 'kind') && !['chapter', 'block'].includes(args.kind)) {
+      throw new Error('editor_search_templates.kind 取值: chapter / block')
+    }
+    if (
+      hasOwn(args, 'interactionType') &&
+      !['hypermedia', 'interface'].includes(args.interactionType)
+    ) {
+      throw new Error(
+        'editor_search_templates.interactionType 取值: hypermedia / interface'
+      )
+    }
+    if (scope === 'center' && !hasOwn(args, 'interactionType')) {
+      throw new Error(
+        'editor_search_templates: scope=center 时必须指定 interactionType'
+      )
+    }
+    if (hasOwn(args, 'pageNo') && (!Number.isInteger(args.pageNo) || args.pageNo < 0)) {
+      throw new Error('editor_search_templates.pageNo 必须是非负整数')
+    }
+    if (
+      hasOwn(args, 'pageSize') &&
+      (!Number.isInteger(args.pageSize) || args.pageSize < 1 || args.pageSize > 100)
+    ) {
+      throw new Error('editor_search_templates.pageSize 必须是 1..100 的整数')
+    }
   }
 
   if (
@@ -3300,6 +3379,19 @@ async function prepareCrossPageBlockCopy(args) {
 
 function getTextTargetSelector(args = {}) {
   return hasOwn(args, 'target') ? { target: args.target } : { elementId: args.elementId }
+}
+
+async function readSemanticSnapshot(args = {}) {
+  try {
+    return await driver.bridgeCall('getSemanticSnapshot', [
+      {
+        ...(args.slideId == null ? {} : { slideId: args.slideId }),
+        richText: args.richText || 'deep'
+      }
+    ])
+  } catch (error) {
+    throw normalizeSemanticSnapshotBridgeError(error)
+  }
 }
 
 async function callTool(name, args) {
@@ -3657,6 +3749,9 @@ async function callTool(name, args) {
       break
     case 'editor_export_slide':
       data = await driver.bridgeCall('exportSlide', [args.slideId])
+      break
+    case 'editor_export_semantic_snapshot':
+      data = persistSemanticSnapshot(await readSemanticSnapshot(args))
       break
     case 'editor_import_blocks':
       await preflightVerifiedSwitch(args, {

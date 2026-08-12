@@ -1,8 +1,11 @@
-# window.__superEditor 桥接 API 契约（v1.9.0）
+# window.__superEditor 桥接 API 契约（v1.10.0）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
 
-v1.9.0 新增同页原子热切书以及 `contextEpoch` / `bookSwitching` 状态。MCP 仍兼容
+v1.10.0 新增只读 `getSemanticSnapshot`，用于冻结当前书本内当前或指定普通目录的完整可编辑语义
+快照；保留原始区块/元素、定位索引、大纲、normalized+raw 数字模块、字体、可选富文本及上下文
+一致性信息，不切页、不跨书、不写业务库。v1.9.0 新增的同页原子热切书以及
+`contextEpoch` / `bookSwitching` 状态继续保持。MCP 仍兼容
 v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为了继续使用立即升级。
 
 ## 1. 启用与挂载
@@ -89,9 +92,9 @@ v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为
 | `buildBookEditorUrl(payload)` | `{ bookId, includeToken?=false }` | 继承当前编辑器环境的目标书本 URL；`book_id/business_id/Scope/token/ai_control` 只写入 `#/content-editor` 后的路由查询串，删除外层重复参数和旧 `catalog_id` |
 | `jumpToBook(payload)` | `{ bookId, target?: url/current/new, includeToken? }` | current 热切成功返回 `{ bookId, url, target: 'current', hotSwitched: true, reloadScheduled: false, contextEpoch }`；不支持热切或安全回滚失败时可返回 `{ scheduled: true, reloadScheduled: true }` 并完整刷新。MCP 只发送一次命令；热切时等待同一 `instanceId` 的目标 epoch、非切换中状态及内容就绪，刷新兜底不沿用旧实例 epoch，并排除初始 `instanceId`，只按同一 `windowId` 接回真正的新实例 |
 | `createBookFromSource(payload)` | `{ sourceBookId, copyMode?: light/full, name?, backgroundName?, smartBookType?, coverImgId?, coverImgUrl?, coverType?, includeToken? }` | 默认 light 只继承外部属性；full 复制目录和内容。返回 `{ sourceBookId, bookId, copyMode, includesCatalogAndContent, cloneMethod, book, editorUrl }` |
-| `searchTemplates(payload)` | `{ kind?: chapter/block, query?, pageNo?, pageSize?, classifyId?, parentId?, timeSort? }` | 本书可用模板 `[{ id, name, type, kind, parentId, classifyId, cover, updatedAt }]` |
+| `searchTemplates(payload)` | `{ scope?: book/center, kind?: chapter/block, interactionType?: hypermedia/interface, query?, pageNo?, pageSize?, classifyId?, parentId?, timeSort? }` | 本书或模板中心可用模板 `[{ id, name, type, kind, scope, suitType, interactionType, parentId, classifyId, classifyIds, cover, updatedAt }]`；`center` 不注入当前 `book_id` 且必须指定交互类型（分别映射 `suit_type=1/2`） |
 | `listTemplates(payload)` | 同 `searchTemplates` | `searchTemplates` 兼容别名 |
-| `getTemplateDetail(payload)` | `{ templateId, parseContent? }` | `{ id, name, type, content, childList, lines }` |
+| `getTemplateDetail(payload)` | `{ templateId, parseContent? }` | 根据本书或模板中心的模板 id 返回 `{ id, name, type, kind, suitType, interactionType, bookId, parentId, classifyIds, cover, content, childList, lines }` |
 | `searchComponents(payload)` | `{ query?, scope?: all/system/mine, classifyType?, classifyId?, limit?, includeContent? }` | 可用组件元数据；默认不返回大体积 content |
 | `searchImageLibrary(payload)` | `{ query?, scope?: book/global/all, groupId?, bookId?, limit? }` | 图片素材 `[{ id, name, url, format, width, height, groupId, groupName, scope }]` |
 | `listDigitalModuleTypes(payload?)` | `{ type? }` | 数字模块类型、支持状态、默认值、配置字段和资源依赖 |
@@ -485,6 +488,7 @@ type 82 中 `timeMode=0` 是正计时、`timeMode=1` 是倒计时；倒计时必
 | 方法 | 参数 | 返回 |
 |------|------|------|
 | `exportSlide(slideId?)` | string（省略=当前页） | `{ slideId, blocks }`（整页完整数据，可用于备份/跨页复用） |
+| `getSemanticSnapshot(payload?)` | `{ slideId?, richText?: 'none'\|'summary'\|'deep' }`（默认当前页、`deep`；只能是当前书本内普通目录） | `{ schemaVersion:'1.0', snapshot:{ identity, state, slide, blocks, elementIndex, outline, digitalModules, richText, fonts, completeness }, meta, stableHash }`；完整只读 envelope，见下方契约 |
 | `replaceSlideContent(slideId, blocks, options?)` | `(string, 模板数组, { saveBeforeSwitch?, discardChanges? })` | `{ slideId, blockIds }`；跨页时先安全切换，再清空目标页重建；传空数组=清空页面，失败会恢复调用前本地内容并报告 `rollbackApplied` |
 | `getBridgeInfo()` | 无 | `{ version, instanceId, windowId, bookId, contextEpoch, bookSwitching, methods }`（methods 为全部可用方法名） |
 | `batch(payload)` | `{ steps: [{ method, args }], stopOnError? }` | `{ results: [{ index, method, ok, value/error }], stopped, stoppedAt }`（一次往返串行执行多步，见下） |
@@ -492,8 +496,24 @@ type 82 中 `timeMode=0` 是正计时、`timeMode=1` 是倒计时；倒计时必
 
 ## 5. 实现注意事项
 
+- **语义快照完整性**：`getSemanticSnapshot` 在读取前后必须核对 `bookId/contextEpoch/dirty`，书本切换或
+  dirty 状态漂移时拒绝返回；当前目录允许读取 working 副本并显式返回 `state.source='working'` 与
+  `dirty`，非当前目录返回持久态 `state.source='persisted'`。`blocks` 保留完整原始可编辑对象；
+  `elementIndex` 每项至少含 `elementId/type/blockId/path/groupPath/geometry`，并尽量保留
+  `sourceId/blockDatabaseId/name/groupId`；`digitalModules.items` 同时包含 `normalized` 与 `raw`，且
+  `includeRaw=true`；`richText.detail` 必须与请求一致，deep 保留 canonical HTML、runs、paragraphs、
+  embeds、links、样式、布局与 hashes。`completeness.sections` 的
+  `blocks/elementIndex/outline/outlineAnchors/digitalModules/digitalModulesRaw/richText/fonts/contentReady`
+  全部使用 boolean；只有全为 `true` 且 warnings 为空时 `complete=true`。部分读取不静默丢弃：设置
+  `complete=false`、对应 section=false 并附至少一个 warning。`stableHash` 是对
+  `{schemaVersion,snapshot,meta}` 递归排除 `capturedAt/stableHash` 后做对象键排序、保留数组顺序的
+  canonical JSON SHA-256；MCP 会用同一算法复算验证。它不同于 MCP 落盘文件的 SHA-256。
+- **语义快照兼容边界**：MCP 不用页面导出或业务摘要拼装缺失能力。旧 Bridge
+  没有 `getSemanticSnapshot` 时明确返回不支持；需要完整语义制作时只有 deep 且
+  `completeness.complete=true` 的结果可继续。
+
 - **原子热切书**：`target=current` 必须先处理 dirty 页并进入互斥状态，再预取目标书元数据、目录与首目录内容；提交前释放旧目录锁、隔离旧请求，提交时统一替换 URL、`sessionStorage.book_id` 和书本级 store。成功后递增 `contextEpoch` 并将 `bookSwitching=false`，最后才返回 `hotSwitched=true`。热切失败不得暴露新旧混合状态；能回滚则恢复原上下文，不能安全回滚才安排完整刷新兜底。
-- **内容就绪**：v1.9.0 热切书完成后的 `getState()` 必须明确返回 `contentReady/currentSlidePlaceholder/emptyBook`。普通书只有在存在 `currentSlideId` 且 `contentReady=true` 时可操作；空书以 `emptyBook=true`、PDF 占位目录以 `currentSlidePlaceholder=true` 显式表示无需普通画布内容。不得用“模板数组非空”代替加载完成，因为正常空白目录也可以已经加载就绪。
+- **内容就绪**：v1.9.0+ 热切书完成后的 `getState()` 必须明确返回 `contentReady/currentSlidePlaceholder/emptyBook`。普通书只有在存在 `currentSlideId` 且 `contentReady=true` 时可操作；空书以 `emptyBook=true`、PDF 占位目录以 `currentSlidePlaceholder=true` 显式表示无需普通画布内容。不得用“模板数组非空”代替加载完成，因为正常空白目录也可以已经加载就绪。
 - **刷新 epoch**：只有 `hotSwitched=true` 返回的 `contextEpoch` 才属于同一实例的最低就绪版本。`reloadScheduled=true` 的旧页 epoch 不得约束刷新后新实例，新实例允许从 `contextEpoch=0` 重新开始。
 - **刷新实例屏障**：`scheduled/reloadScheduled=true` 后，旧页面在 `setTimeout(location.reload)` 延迟期可能已因 URL 或 session 变化上报目标 `bookId`。MCP 必须把发出导航命令的 `instanceId` 加入本次认领排除项；旧实例无论上报何种 book/store 状态都不能完成切换，只有同一 `windowId` 下不同的实例可返回 `ready=true`。
 - **迟到响应隔离**：每个书本异步加载都必须捕获发起时的上下文版本，并在提交响应前核对 `contextEpoch`/目标 bookId；旧书响应不得写进新书 store。

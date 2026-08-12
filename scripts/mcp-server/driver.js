@@ -9,6 +9,7 @@ import {
   ensureLocalRpcBroker,
   stopLocalRpcBroker
 } from './rpc-broker.js'
+import { calculateSemanticSnapshotStableHash } from './semanticSnapshotFile.js'
 
 const MOCK = process.env.SUPER_EDITOR_MOCK === '1'
 const RPC_REQUEST_TIMEOUT_MS = 90000
@@ -20,6 +21,10 @@ const CONTROL_TIMEOUT_MS = 3000
 const CLIENT_ID = 'mcp-' + randomUUID()
 const LEASE_RENEW_INTERVAL_MS = 10000
 const MAX_INLINE_FILE_BYTES = 70 * 1024 * 1024
+const MOCK_SEMANTIC_SNAPSHOT_UNSUPPORTED =
+  process.env.SUPER_EDITOR_MOCK_SEMANTIC_SNAPSHOT_UNSUPPORTED === '1'
+const MOCK_SEMANTIC_SNAPSHOT_INCOMPLETE =
+  process.env.SUPER_EDITOR_MOCK_SEMANTIC_SNAPSHOT_INCOMPLETE === '1'
 
 let active = null // { mode: 'rpc'|'mock', origin, instanceId, page }
 let connectPromise = null
@@ -829,13 +834,191 @@ function mockResult(method, args = []) {
   switch (method) {
     case 'ping':
       return {
-        version: '1.9.0',
+        version: '1.10.0',
         editorType: 'content-editor',
         bookId: 'mock-book',
         mode: 'ai-control',
         contextEpoch: 1,
         bookSwitching: false
       }
+    case 'getSemanticSnapshot': {
+      if (MOCK_SEMANTIC_SNAPSHOT_UNSUPPORTED) {
+        const error = new Error('__superEditor.getSemanticSnapshot 不存在')
+        error.code = 'RPC_ERROR'
+        throw error
+      }
+      const catalogId = String(arg.slideId || 'slide-1')
+      const targetIsCurrent = catalogId === 'slide-1'
+      const richTextDetail = arg.richText || 'deep'
+      const richTextDocument = {
+        target: { kind: 'element', elementId: 'text-1' },
+        elementId: 'text-1',
+        blockId: 'block-1',
+        plainText: '示例文本',
+        contentHash: 'mock-text-hash-1',
+        htmlHash: 'mock-html-hash-1',
+        hyperlinkMetadataHash: 'mock-link-hash-1',
+        defaultStyle: { fontChinese: '思源黑体 CN', fontSize: 16, color: '#333333' },
+        layout: { extendType: 'both', width: 200, height: 50 }
+      }
+      if (richTextDetail === 'deep') {
+        Object.assign(richTextDocument, {
+          content: '<p>示例文本</p>',
+          canonicalHtml: '<p>示例文本</p>',
+          paragraphs: [{ index: 0, start: 0, length: 4, text: '示例文本' }],
+          runs: [{ start: 0, length: 4, text: '示例文本', formats: { bold: true } }],
+          embeds: [],
+          hyperlinks: []
+        })
+      }
+      const block = {
+        id: 301,
+        uuid: 'block-1',
+        template_type: 2,
+        template_data_content: {
+          name: '知识讲解',
+          width: 794,
+          height: 300,
+          elements: [
+            {
+              id: 'text-1',
+              sourceId: 'source-text-1',
+              name: '正文',
+              type: 'text',
+              templateId: 'block-1',
+              groupId: 0,
+              left: 75,
+              top: 20,
+              width: 200,
+              height: 50,
+              rotate: 0,
+              content: '<p>示例文本</p>'
+            }
+          ]
+        }
+      }
+      const semanticSnapshotPayload = {
+        schemaVersion: '1.0',
+        snapshot: {
+          identity: {
+            bookId: 'mock-book',
+            bookInfo: {
+              id: 'mock-book',
+              name: '示例语文学霸笔记',
+              subject_list: [{ id: 3, name: '语文' }],
+              grade_id: 3,
+              volume: 1
+            },
+            catalogId,
+            catalogName: arg.slideId ? `目录 ${catalogId}` : '第 1 页',
+            catalogSort: 1,
+            currentSlideId: 'slide-1',
+            contextEpoch: 1,
+            targetIsCurrent
+          },
+          state: {
+            source: targetIsCurrent ? 'working' : 'persisted',
+            dirty: targetIsCurrent ? mockDirty : false,
+            contentReady: true,
+            capturedBookId: 'mock-book',
+            contextEpoch: 1
+          },
+          slide: { id: catalogId, name: arg.slideId ? `目录 ${catalogId}` : '第 1 页', sort: 1 },
+          blocks: [block],
+          elementIndex: [
+            {
+              elementId: 'text-1',
+              sourceId: 'source-text-1',
+              type: 'text',
+              name: '正文',
+              blockId: 'block-1',
+              blockDatabaseId: 301,
+              path: [0],
+              groupId: 0,
+              groupPath: [],
+              geometry: { left: 75, top: 20, width: 200, height: 50, rotate: 0 }
+            }
+          ],
+          outline: {
+            tree: [
+              {
+                id: 'outline-1',
+                outline_name: '学习目标',
+                content_uuids: ['block-1'],
+                children: []
+              }
+            ],
+            selectedOutlineId: null,
+            anchors: []
+          },
+          digitalModules: {
+            includeRaw: true,
+            items: [
+              {
+                elementId: 'button-1',
+                blockId: 'block-1',
+                blockDatabaseId: 301,
+                normalized: {
+                  relationId: 'mock-relation-1',
+                  modelId: 991,
+                  type: 84,
+                  typeName: '打印',
+                  name: '打印'
+                },
+                raw: {
+                  control_id: 'button-1',
+                  hypermedia_content_id: 301,
+                  model_id: 991,
+                  catalog_model_resp_en: { id: 991, type: 84, name: '打印' },
+                  model_content_resp_en: []
+                }
+              }
+            ]
+          },
+          richText: {
+            detail: richTextDetail,
+            items: richTextDetail === 'none' ? [] : [richTextDocument]
+          },
+          fonts: {
+            source: targetIsCurrent ? 'current-editor' : 'book-font-configuration',
+            items: [{ label: '思源黑体 CN', value: '思源黑体 CN', available: true }]
+          },
+          completeness: {
+            complete: !MOCK_SEMANTIC_SNAPSHOT_INCOMPLETE,
+            sections: {
+              blocks: true,
+              elementIndex: true,
+              outline: true,
+              outlineAnchors: true,
+              digitalModules: true,
+              digitalModulesRaw: true,
+              richText: !MOCK_SEMANTIC_SNAPSHOT_INCOMPLETE,
+              fonts: true,
+              contentReady: true
+            },
+            warnings: MOCK_SEMANTIC_SNAPSHOT_INCOMPLETE
+              ? [
+                  {
+                    code: 'MOCK_SECTION_INCOMPLETE',
+                    section: 'richText',
+                    message: 'mock semantic snapshot 富文本读取不完整'
+                  }
+                ]
+              : []
+          }
+        },
+        meta: {
+          blockCount: 1,
+          elementCount: 1,
+          outlineCount: 1,
+          digitalModuleCount: 1,
+          richTextTargetCount: richTextDetail === 'none' ? 0 : 1
+        }
+      }
+      semanticSnapshotPayload.stableHash =
+        calculateSemanticSnapshotStableHash(semanticSnapshotPayload)
+      return semanticSnapshotPayload
+    }
     case 'getMockCallLog':
       return mockBridgeCalls
     case 'getUserInfo':
@@ -1094,8 +1277,17 @@ function mockResult(method, args = []) {
           name: arg.kind === 'block' ? '示例区块模板' : '示例样章模板',
           type: arg.kind === 'block' ? 2 : 3,
           kind: arg.kind === 'block' ? 'block' : 'chapter',
+          scope: arg.scope || 'book',
+          suitType:
+            arg.interactionType === 'interface'
+              ? 2
+              : arg.interactionType === 'hypermedia'
+                ? 1
+                : null,
+          interactionType: arg.interactionType || null,
           parentId: null,
           classifyId: null,
+          classifyIds: [],
           cover: 'https://mock.example.com/template.png',
           updatedAt: null
         }
@@ -1105,6 +1297,13 @@ function mockResult(method, args = []) {
         id: arg.templateId,
         name: '示例模板',
         type: 3,
+        kind: 'chapter',
+        suitType: 2,
+        interactionType: 'interface',
+        bookId: null,
+        parentId: null,
+        classifyIds: [],
+        cover: 'https://mock.example.com/template.png',
         content: {},
         childList: [],
         lines: []

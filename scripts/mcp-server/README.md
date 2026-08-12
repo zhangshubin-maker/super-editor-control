@@ -17,7 +17,18 @@
 - MCP 进程启动时争用 `127.0.0.1:8765`。首个进程成为 broker owner，其他进程作为 follower
   复用；owner 退出后 follower 通常在约 2 秒内自动接管。
 - `editor_*` 工具第一次调用时自动选择并租用可用页面，无需 `pageUrl` / `httpUrl`。
-- 首次连接后会固定页面的 `windowId`。Bridge v1.9.0 热切书时继续使用原 `instanceId` 和租约；旧 Bridge 安排完整刷新后，驱动立即建立新实例屏障，排除旧 `instanceId`（即使它在 50ms 延迟期已上报目标书状态），最多等待 30 秒并只认领同一浏览器窗口的新实例，其他已打开书本不会成为回退目标。
+- 首次连接后会固定页面的 `windowId`。Bridge v1.9.0+ 热切书时继续使用原 `instanceId` 和租约；旧 Bridge 安排完整刷新后，驱动立即建立新实例屏障，排除旧 `instanceId`（即使它在 50ms 延迟期已上报目标书状态），最多等待 30 秒并只认领同一浏览器窗口的新实例，其他已打开书本不会成为回退目标。
+
+- `editor_export_semantic_snapshot` 通过 Bridge v1.10.0+ 的只读 `getSemanticSnapshot` 冻结当前
+  书本内当前或指定普通目录的完整可编辑语义快照。它包含原始区块/元素、元素路径与几何索引、
+  大纲、normalized+raw 数字模块、字体、富文本结构及 working/persisted/dirty 身份；结果按内容
+  寻址写入系统临时目录并返回绝对路径、独立文件 SHA-256、Bridge 稳定 hash 和完整度。
+  `richText` 支持 `none/summary/deep`，默认 `deep`；`fullFidelity=false` 时仍保留诊断文件，但完整
+  生成流程必须停止或补齐。旧 Bridge 缺少该原子方法时明确返回
+  `SEMANTIC_SNAPSHOT_UNSUPPORTED`，不会用摘要拼装伪降级。
+  MCP 会重算 Bridge `stableHash`，并把 envelope 以仅当前用户可读写的受控临时目录/文件权限
+  （POSIX `0700/0600`，Windows 使用系统 ACL 语义）落盘；拒绝符号链接和非普通目标。返回的
+  `snapshotStableHashVerified=true` 表示权威内容哈希已经复算通过，`snapshotFileSha256` 则校验实际文件。
 - `editor_jump_to_book(target=current)` 会先检查 dirty 状态；需要保存时传 `saveBeforeSwitch=true`。工具优先等待原实例的目标 `bookId`、`contextEpoch` 和 `bookSwitching=false` 在 `ping/getState` 中收敛，并确认普通书存在当前目录且 `contentReady=true`；`emptyBook=true` 和 `currentSlidePlaceholder=true` 是显式可就绪例外。刷新兜底不沿用旧页 epoch，只等待同一 `windowId` 的新实例。成功统一返回 `ready=true`，不把 `scheduled=true` 当成切书完成；v1.8 无内容就绪字段时保持兼容。
 - 新标签页/新窗口使用不同 `windowId`；如果检测到同一窗口身份对应多个页面，会以 `WINDOW_AMBIGUOUS` 安全失败，禁止猜测和串页。
 - `editor_status` 只报告可用页面；没有活动连接时不会占用租约。
@@ -58,7 +69,7 @@ node index.js
 | `editor_get_book_manifest` / `editor_search_book_content` | 按当前目录或显式整书范围理解、搜索课件内容 |
 | `editor_save_verified` | 保存当前 dirty 页并回读校验；可显式执行整书摘要校验 |
 | `editor_list_book_versions` / `editor_get_book_version` / `editor_restore_book_version` | 查询、预检和恢复后端持久版本 |
-| `editor_search_templates` / `editor_apply_template` | 搜索并应用模板 |
+| `editor_search_templates` / `editor_get_template` / `editor_apply_template` | 搜索本书或模板中心、按 id 读取并应用模板；模板中心必须指定超媒/界面交互型 |
 | `editor_search_components` / `editor_apply_component` | 搜索并应用组件 |
 | `editor_search_images` / `editor_apply_image` | 搜索并应用图片素材 |
 | `editor_upload_file` | 上传本地/base64 图片、音频、视频、PDF 或课件文件 |
@@ -105,7 +116,9 @@ node index.js
   重写全书。
 - `editor_list_book_versions(scope=book)` 用 `pageNo/pageSize` 分页目录，再用
   `versionPageNo/versionPageSize` 分页每个目录的版本，避免隐式请求所有目录的全部历史。
-- 新目录设计优先用 `editor_search_templates` / `editor_get_template` 搜索样章和区块模板，参考其
+- 新目录设计优先用 `editor_search_templates` / `editor_get_template` 搜索样章和区块模板；默认
+  `scope=book`，需要模板中心时用 `scope=center` 并明确
+  `interactionType=hypermedia/interface`，再参考其
   成熟结构与风格。先应用模板得到真实目标区块，再向该 `blockId` 排版题目；题目编排的
   `styleReference` 只记录/核对参考来源，不会自行下载模板或替换真实题目内容。
 - 版本恢复和题目区块写入先使用 `validateOnly=true`；确认影响范围后再实际写入。
