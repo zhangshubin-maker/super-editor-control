@@ -1,18 +1,20 @@
 {
-  "super-editor": {
-    "enabled": true,
-    "command": "powershell.exe",
-    "args": [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      "./scripts/mcp-server/start.ps1"
-    ],
-    "cwd": ".",
-    "startup_timeout_sec": 15,
-    "tool_timeout_sec": 120
+  "mcpServers": {
+    "super-editor": {
+      "enabled": true,
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "./scripts/mcp-server/start.ps1"
+      ],
+      "cwd": ".",
+      "startup_timeout_sec": 15,
+      "tool_timeout_sec": 120
+    }
   }
 }
