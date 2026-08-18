@@ -95,9 +95,13 @@ MCP 会按 Bridge 契约复算内容稳定 hash，并使用私有权限的受控
 
 高频操作优先使用 typed 工具：`editor_move/resize/rotate_element`、`editor_move_elements`、
 `editor_set_element_spacing`、`editor_center_element_in_block`、`editor_scroll_to_block/element`、
-`editor_set_zoom`、`editor_fit_canvas`、`editor_add/delete/move_slide`、
+`editor_set_canvas_type`、`editor_set_zoom`、`editor_fit_canvas`、`editor_add/delete/move_slide`、
 `editor_move/replace/copy_block_to_slide`。`editor_rpc_call` 只用于尚未封装且已经核对 Bridge 签名的
 低频方法。
+
+`editor_set_canvas_type` 原子同步页面级画布与当前页全部区块：手机端固定 375，PC/Pad 固定 794，
+自定义类型要求显式宽度。目录信息立即写库，区块进入工作副本并需 `editor_save_verified`；因此页面
+checkpoint 不能完整回退该操作。
 
 元素 `left/top` 永远是其 owner 区块内的 block-local 坐标，不能把整页 `pageY` 直接传给
 `editor_move_element`。跨区块布局先用

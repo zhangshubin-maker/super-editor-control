@@ -44,6 +44,22 @@ editor_checkpoint({ label: "重排当前练习区前" })
 editor_rollback({ checkpointId: "返回的 checkpointId" })
 ```
 
+## 页面级画布类型与宽度
+
+先用 `editor_get_canvas_info` 读取 `canvasType` 与 `canvasWidth`。切换端类型必须调用
+`editor_set_canvas_type`，不得只把区块改成 375 宽而保留页面级 PC 画布，也不得用鼠标操作画布设置面板。
+
+```text
+editor_set_canvas_type({ canvasType: "phone" }) // 页面与全部区块统一为 375
+editor_set_canvas_type({ canvasType: "pc" })    // 页面与全部区块统一为 794
+editor_set_canvas_type({ canvasType: "auto", width: 960 })
+```
+
+`phone` 固定 375，`pc` / `pad` 固定 794；只有 `auto` 接受并要求 `width`。该原子操作会立即持久化
+目录的 `size_type` / `total_width`，同时把当前页全部区块写入工作副本。核对返回的
+`canvasType`、`canvasWidth` 和 `syncedBlockIds`；`dirty=true` 时继续调用
+`editor_save_verified(scope=current)` 保存并回读区块。checkpoint 只能恢复区块工作副本，不能回退已写库的目录画布设置。
+
 ## 视图与截图
 
 `editor_screenshot` 支持当前视口、指定区块和 full page。定位与缩放优先使用

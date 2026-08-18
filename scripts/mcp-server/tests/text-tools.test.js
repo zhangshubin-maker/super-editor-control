@@ -101,7 +101,7 @@ test('structured text tools are listed and callable through stdio mock MCP', asy
     const initialized = await client.request('initialize', {
       protocolVersion: '2025-06-18'
     })
-    assert.equal(initialized.result.serverInfo.version, '0.10.0')
+    assert.equal(initialized.result.serverInfo.version, '0.11.0')
 
     const listed = await client.request('tools/list')
     const tools = new Map(listed.result.tools.map((tool) => [tool.name, tool]))

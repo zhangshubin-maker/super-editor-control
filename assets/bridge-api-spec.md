@@ -1,6 +1,9 @@
-# window.__superEditor 桥接 API 契约（v1.12.0）
+# window.__superEditor 桥接 API 契约（v1.13.0）
 
 本文档定义 super-editor 编辑器侧需要实现的桥接层接口，供 Codex 通过浏览器控制编辑器（本插件 skill / MCP 的调用依据）。
+
+v1.13.0 新增页面级 `setCanvasType`：复用编辑器已有画布类型 action，同步目录的 `size_type` /
+`total_width` 与当前页全部区块的 `size.type` / `size.width`，并在写后回读类型和宽度。
 
 v1.12.0 新增保留身份的区块/元素树安全替换：先 dry-run 取得字段差异与 `expectedHash`，正式写入时
 强制保持 block/element id、元素类型、父子关系和顺序不变。数字模块以 element id 为关联锚点，任何
@@ -251,7 +254,8 @@ v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为
 | `fitCanvas()` | 无 | 最新 `getViewport()`（自适应窗口并居中） |
 | `scrollToTop()` / `scrollToBottom()` | 无 | 最新 `getViewport()` |
 | `clearSelection()` | 无 | `{ selected: [] }` |
-| `getCanvasInfo()` | 无 | `{ slideId, canvasWidth, canvasHeight, scale, viewportLeft, viewportTop, stats }` |
+| `getCanvasInfo()` | 无 | `{ slideId, canvasType, canvasWidth, canvasHeight, scale, viewportLeft, viewportTop, stats }` |
+| `setCanvasType(payload)` | `{ canvasType: 'pc'|'phone'|'pad'|'auto', width? }`；`auto` 必须传正整数 `width`，固定类型禁止传 `width` | 写后 `getCanvasInfo()` + `{ changed, previousCanvasType, previousCanvasWidth, syncedBlockIds, dirty }`；目录信息立即写库，区块工作副本需保存 |
 | `scrollToBlock(blockId)` | string | 最新 `getViewport()`（滚动到区块顶部附近） |
 
 > 选中元素后，右侧属性面板会同步显示该元素的 X/Y/宽高/样式，`getElement` 可直接读取数据；

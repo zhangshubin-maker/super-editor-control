@@ -83,7 +83,7 @@ test('数字模块、题目和通用上传工具均可通过 mock MCP 调用', a
     const initialized = await client.request('initialize', {
       protocolVersion: '2025-06-18'
     })
-    assert.equal(initialized.result.serverInfo.version, '0.10.0')
+    assert.equal(initialized.result.serverInfo.version, '0.11.0')
 
     const listed = await client.request('tools/list')
     const names = listed.result.tools.map((tool) => tool.name)
@@ -1184,6 +1184,7 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
       'editor_duplicate_elements',
       'editor_get_elements_bounds',
       'editor_get_canvas_info',
+      'editor_set_canvas_type',
       'editor_scroll_to_block',
       'editor_scroll_to_element',
       'editor_set_zoom',
@@ -1262,6 +1263,7 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
         { elementIds: ['el-1', 'el-2'], coordinateSpace: 'page' }
       ],
       ['editor_get_canvas_info', {}],
+      ['editor_set_canvas_type', { canvasType: 'phone' }],
       ['editor_scroll_to_block', { blockId: 'block-1' }],
       ['editor_scroll_to_element', { elementId: 'el-1' }],
       ['editor_set_zoom', { scale: 1.25 }],
@@ -1301,6 +1303,20 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
         )
       )
     }
+    const missingAutoCanvasWidth = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_set_canvas_type',
+        arguments: { canvasType: 'auto' }
+      })
+    )
+    assert.match(missingAutoCanvasWidth.error, /width 必须是正整数/)
+    const fixedCanvasWithWidth = readToolError(
+      await client.request('tools/call', {
+        name: 'editor_set_canvas_type',
+        arguments: { canvasType: 'phone', width: 375 }
+      })
+    )
+    assert.match(fixedCanvasWithWidth.error, /固定画布类型不接受 width/)
     const missingSafeHash = readToolError(
       await client.request('tools/call', {
         name: 'editor_replace_element_safe',
@@ -1346,6 +1362,22 @@ test('tools/list 保持 Codex 可机械转换的扁平 schema，并暴露高频 
     })
     assert.equal(successfulResults.get('editor_get_elements_bounds').coordinateSpace, 'page')
     assert.equal(successfulResults.get('editor_get_canvas_info').canvasWidth, 794)
+    assert.deepEqual(
+      {
+        canvasType: successfulResults.get('editor_set_canvas_type').canvasType,
+        canvasWidth: successfulResults.get('editor_set_canvas_type').canvasWidth,
+        syncedBlockIds: successfulResults.get('editor_set_canvas_type').syncedBlockIds
+      },
+      { canvasType: 'phone', canvasWidth: 375, syncedBlockIds: ['block-1'] }
+    )
+    assert.ok(
+      successfulCallLog.some(
+        (call) =>
+          call.method === 'setCanvasType' &&
+          JSON.stringify(call.args) === JSON.stringify([{ canvasType: 'phone' }])
+      ),
+      'editor_set_canvas_type 应调用页面级画布 Bridge 方法'
+    )
     assert.match(successfulResults.get('editor_apply_template').slideId, /^mock-slide-/)
     assert.equal(
       successfulResults.get('editor_import_blocks').args[2].discardChanges,

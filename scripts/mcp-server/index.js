@@ -9,7 +9,7 @@ import {
   persistSemanticSnapshot
 } from './semanticSnapshotFile.js'
 
-const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.10.0' }
+const SERVER_INFO = { name: 'super-editor-control-mcp', version: '0.11.0' }
 
 const ID_SCHEMA = { type: ['string', 'number'] }
 const ID_LIST_SCHEMA = {
@@ -1297,8 +1297,29 @@ const TOOLS = [
   },
   {
     name: 'editor_get_canvas_info',
-    description: '读取当前目录的页面尺寸、缩放、视口偏移和元素统计，用于布局计算与视图诊断。',
+    description: '读取当前目录的页面画布类型、尺寸、缩放、视口偏移和元素统计，用于布局计算与视图诊断。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'editor_set_canvas_type',
+    description: '设置当前目录的页面级画布类型并同步全部区块宽度。phone 固定 375，pc/pad 固定 794；auto 必须同时传 width。返回写后回读、变更前类型/宽度、同步区块和 dirty 状态。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasType: {
+          type: 'string',
+          enum: ['pc', 'phone', 'pad', 'auto'],
+          description: '页面级画布类型'
+        },
+        width: {
+          type: 'integer',
+          minimum: 1,
+          description: '仅 canvasType=auto 时必填；固定类型禁止传入'
+        }
+      },
+      required: ['canvasType'],
+      additionalProperties: false
+    }
   },
   {
     name: 'editor_scroll_to_block',
@@ -2413,6 +2434,8 @@ const SPECIAL_TOOL_DESCRIPTION_TAGS = {
   editor_scroll_to_element: '[仅视图状态|不写库]',
   editor_set_zoom: '[仅视图状态|不写库]',
   editor_fit_canvas: '[仅视图状态|不写库]',
+  editor_set_canvas_type:
+    '[目录立即写库+区块工作副本写入|区块需 saveVerified|checkpoint不可完整恢复]',
   editor_outline_select: '[仅视图状态|不写库]',
   editor_apply_template: '[按 kind：chapter 立即写库；block 工作副本写入]',
   editor_select_slide:
@@ -3386,6 +3409,18 @@ function validateCoreToolArgs(name, args = {}) {
   if (name === 'editor_set_zoom') {
     requireFiniteNumber(args.scale, 'scale', { minimum: 0.1, maximum: 3 })
   }
+  if (name === 'editor_set_canvas_type') {
+    if (!['pc', 'phone', 'pad', 'auto'].includes(args.canvasType)) {
+      throw new Error('canvasType 取值: pc / phone / pad / auto')
+    }
+    if (args.canvasType === 'auto') {
+      if (!Number.isInteger(args.width) || args.width < 1) {
+        throw new Error('canvasType=auto 时 width 必须是正整数')
+      }
+    } else if (hasOwn(args, 'width')) {
+      throw new Error('固定画布类型不接受 width；宽度由 canvasType 决定')
+    }
+  }
 
   if (name === 'editor_batch') {
     if (!Array.isArray(args.steps) || !args.steps.length) {
@@ -3785,6 +3820,9 @@ async function callTool(name, args) {
       break
     case 'editor_get_canvas_info':
       data = await driver.bridgeCall('getCanvasInfo')
+      break
+    case 'editor_set_canvas_type':
+      data = await driver.bridgeCall('setCanvasType', [args])
       break
     case 'editor_scroll_to_block':
       data = await driver.bridgeCall('scrollToBlock', [args.blockId])

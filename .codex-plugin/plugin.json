@@ -1,6 +1,6 @@
 {
   "name": "super-editor-control",
-  "version": "1.0.0+codex.20260812103444",
+  "version": "1.0.0+codex.20260817194925",
   "description": "Create and validate complete Super Editor books, arrange question-bank content, and control courseware through a built-in MCP adapter and localhost RPC broker.",
   "author": {
     "name": "Super Editor Team"

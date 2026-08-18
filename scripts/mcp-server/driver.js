@@ -834,7 +834,7 @@ function mockResult(method, args = []) {
   switch (method) {
     case 'ping':
       return {
-        version: '1.12.0',
+        version: '1.13.0',
         editorType: 'content-editor',
         bookId: 'mock-book',
         mode: 'ai-control',
@@ -1516,6 +1516,7 @@ function mockResult(method, args = []) {
     case 'getCanvasInfo':
       return {
         slideId: 'slide-1',
+        canvasType: 'pc',
         canvasWidth: 794,
         canvasHeight: 1123,
         scale: 1,
@@ -1523,6 +1524,26 @@ function mockResult(method, args = []) {
         viewportTop: 0,
         stats: { blockCount: 1, elementCount: 1, typeCounts: { text: 1 } }
       }
+    case 'setCanvasType': {
+      const widths = { pc: 794, phone: 375, pad: 794 }
+      const canvasType = arg.canvasType
+      const canvasWidth = canvasType === 'auto' ? arg.width : widths[canvasType]
+      return {
+        slideId: 'slide-1',
+        canvasType,
+        canvasWidth,
+        canvasHeight: 1123,
+        scale: 1,
+        viewportLeft: 0,
+        viewportTop: 0,
+        stats: { blockCount: 1, elementCount: 1, typeCounts: { text: 1 } },
+        changed: true,
+        previousCanvasType: 'pc',
+        previousCanvasWidth: 794,
+        syncedBlockIds: ['block-1'],
+        dirty: true
+      }
+    }
     case 'fitTableHeights':
       return { tableId: arg.tableId, changed: true, heights: [32, 70], oldHeights: [45, 85], height: 102 }
     case 'getTableInfo':
