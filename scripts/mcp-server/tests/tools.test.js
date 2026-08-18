@@ -843,6 +843,10 @@ test('整书创作工具默认保持当前目录轻调用，整书和深读必�
     assert.equal(saved.saved, true)
     assert.equal(saved.savedScope, 'current')
     assert.equal(saved.verified, true)
+    assert.equal(saved.persistedContentHash, saved.contentHash)
+    assert.equal(saved.normalizationOnly, false)
+    assert.equal(saved.reconciled, false)
+    assert.deepEqual(saved.businessDiffPaths, [])
 
     const versions = readToolData(
       await client.request('tools/call', {

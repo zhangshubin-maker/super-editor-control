@@ -131,7 +131,7 @@ export const BOOK_AUTHORING_TOOLS = [
   {
     name: 'editor_save_verified',
     description:
-      '保存并回读校验。默认 scope=current 且 verify=true，只保存/核对当前目录；scope=book 仍只保存当前 dirty 页，再分页完成整书摘要校验，不会逐页切换并重写全书。',
+      '保存并回读校验。默认 scope=current 且 verify=true；若服务端仅补齐 id、sort 等存储字段，会自动回灌当前工作副本并二次校验，业务内容变化则保持 verified=false 并返回差异路径。scope=book 仍只保存当前 dirty 页，再分页完成整书摘要校验。',
     inputSchema: {
       type: 'object',
       properties: {

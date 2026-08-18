@@ -68,7 +68,7 @@ MCP 会按 Bridge 契约复算内容稳定 hash，并使用私有权限的受控
   `detail=standard/deep`。整书结果通过 `pageNo/pageSize` 分页。
 - `editor_search_book_content` 默认只搜索当前目录的普通文本、表格单元格和思维导图节点；跨目录
   搜索必须显式传 `scope=book`。
-- `editor_save_verified` 默认保存并回读校验当前目录。`scope=book` 仍只保存当前 dirty 页，再做
+- `editor_save_verified` 默认保存并回读校验当前目录；服务端只补齐存储字段时自动回灌并二次校验，业务内容变化时返回差异路径且不回灌。`scope=book` 仍只保存当前 dirty 页，再做
   整书摘要校验，不会为一次小改动逐页切换和重写全书。
 - `editor_list_book_versions`、`editor_get_book_version` 和 `editor_restore_book_version` 使用后端
   持久版本；整书列表用 `pageNo/pageSize` 分页目录，再用

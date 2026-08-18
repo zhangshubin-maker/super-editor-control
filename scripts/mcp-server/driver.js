@@ -1144,8 +1144,9 @@ function mockResult(method, args = []) {
         warnings: []
       }
     }
-    case 'saveVerified':
+    case 'saveVerified': {
       mockDirty = false
+      const contentHash = arg.expectedContentHash || 'mock-slide-hash-1'
       return {
         scope: arg.scope || 'current',
         saved: true,
@@ -1155,7 +1156,15 @@ function mockResult(method, args = []) {
         verifiedScope: arg.verify === false ? null : 'current',
         slideId: arg.expectedSlideId || 'slide-1',
         dirty: false,
-        contentHash: arg.expectedContentHash || 'mock-slide-hash-1',
+        contentHash,
+        persistedContentHash: contentHash,
+        authoringContentHash: 'mock-authoring-hash-1',
+        persistedAuthoringContentHash: 'mock-authoring-hash-1',
+        normalizationOnly: false,
+        reconciled: false,
+        reloadedContentHash: null,
+        businessDiffPaths: [],
+        warnings: [],
         ...(arg.scope === 'book'
           ? {
               bookManifestChecked: true,
@@ -1166,6 +1175,7 @@ function mockResult(method, args = []) {
             }
           : {})
       }
+    }
     case 'listBookVersions':
       return {
         scope: arg.scope || 'current',

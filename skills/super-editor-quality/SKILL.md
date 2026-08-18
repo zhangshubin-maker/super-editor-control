@@ -22,7 +22,9 @@ description: 超媒编辑器课件质量审计、当前页保存回读与版本�
 1. 写操作后读取目标确认本地状态。
 2. 调用 `editor_save_verified({ scope: 'current', expectedSlideId, verify: true })`；不把 micro/current 保存升级为 book 扫描。
 3. 核对返回的 slideId、dirty、保存前后 hash 和回读结果。
-4. hash 或 expectedSlideId 不匹配时停止后续写入，重新读取现状。
+4. 完整 hash 因服务端补齐 `id/sort` 等存储字段而变化时，由工具返回
+   `normalizationOnly=true/reconciled=true` 并在 MCP 内回灌；不得刷新浏览器验证。业务内容 hash
+   不同或 `businessDiffPaths` 非空时停止后续写入，重新读取现状。
 5. 多目录任务每完成一页就保存验证，避免最后一次性承担全部风险。
 
 `expectedContentHash` 是可选并发保护。若传入，必须是**写入后、保存前**刚从当前页 manifest/页面清单取得的页级内容 hash；不要传文本工具的 target `contentHash`，也不要传审计报告的 `sourceHash`。`editor_save_verified(scope=book)` 仍只保存当前 dirty 页，然后附加整书摘要校验，不会逐页保存全书。

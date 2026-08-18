@@ -264,7 +264,7 @@ v1.8.2 的完整刷新式 `jumpToBook(target=current)`；旧 Bridge 不需要为
 | `undo()` / `redo()` | 无 | `{ disabled: true, reason }`（ai_control 已禁用，改用快照回滚） |
 | `canUndo()` / `canRedo()` | 无 | `{ disabled: true, reason }`（同左） |
 | `save()` | 无 | 无（复用编辑器保存流程） |
-| `saveVerified(payload?)` | `{ scope?: current/book, verify?=true, expectedSlideId?, expectedContentHash? }` | 始终只保存当前 dirty 页，返回 `savedScope=current/savedSlides`；scope=book 额外做分页整书摘要校验，不会逐页重写 |
+| `saveVerified(payload?)` | `{ scope?: current/book, verify?=true, expectedSlideId?, expectedContentHash? }` | 始终只保存当前 dirty 页；若完整 hash 不同但业务内容 hash 相同，自动回灌服务端规范化结果并二次校验，返回 `normalizationOnly/reconciled/reloadedContentHash`；业务内容不同则 `verified=false` 并返回 `businessDiffPaths`。scope=book 额外做分页整书摘要校验，不会逐页重写 |
 | `restoreBookVersion(payload)` | `{ versionId, scope?: current/book, slideId?, validateOnly?, expectedCurrentVersionId? }` | 恢复一个目录的持久版本；scope=book 必须明确 slideId，先 validateOnly 预检；实际恢复后当前目录会重载核对 |
 
 ### 快照 / 回滚（ai_control 专用，替代撤销/重做）
