@@ -46,8 +46,9 @@ editor_search_elements({ keyword: "学习目标", type: "text" })
   `editor_export_semantic_snapshot({ slideId?, richText?: "none"|"summary"|"deep" })`。它只读当前
   连接书本内的普通目录，不切页、不跨书，把完整 envelope 内容寻址写入受控临时目录，并返回
   `snapshotPath`、文件哈希、Bridge 稳定哈希、工作副本/持久态和完整度。语义化制作默认使用
-  `richText="deep"`，只有 `fullFidelity=true` 才能作为完整生成依据；否则读取 warnings 后停止或补齐，
-  不得把部分快照当成完整来源。
+  `richText="deep"`，只有 `fullFidelity=true` 才能作为完整生成依据。书级字体清单来源明确为
+  `book-store-empty`、且唯一告警为 `FONT_MAPPING_EMPTY` 时，MCP 会保留诊断并允许
+  `fullFidelity=true`；其他情况读取 warnings 后停止或补齐，不得把部分快照当成完整来源。
 - 元素常用字段为 `id/type/templateId/groupId/left/top/width/height/rotate/child_list`。
 - 文本元素、表格单元格和思维导图节点的富文本内容统一由 `super-editor-text` 读取。
 - Tab 只保留为兼容元素类型，普通课件任务不主动分析或创建。

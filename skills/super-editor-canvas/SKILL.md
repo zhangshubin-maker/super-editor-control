@@ -72,7 +72,12 @@ editor_screenshot({ blockId: "block-uuid" })
 editor_get_canvas_tree({})
 ```
 
-- 当前页布局优先截受影响区块；整页流向变化或跨区块视觉关系本身是验收目标时，必须截 full page。
+- 当前页布局优先截受影响区块。页面较长、图片较多或整页渲染成本不明时，先用区块截图配合
+  `editor_get_canvas_tree`、文本布局检查完成局部验收；只有整页流向变化或跨区块视觉关系本身是验收目标时，
+  才在内容保存稳定后单独截 full page，且不要与写入或其他截图并发。
+- full page 截图返回 `OUTCOME_UNKNOWN` 时禁止立即重放。先调用 `editor_status`，再读取当前状态，确认同一
+  `windowId`、书本和目录已经恢复；身份不一致或页面未重新注册时停止并请求用户恢复 AI 控制。身份恢复后
+  优先降级为受影响区块截图；仅当整页关系仍是必要验收目标时，才允许单独重试一次 full page。
 - canvas 类内容和跨域图片可能截图为空；结合正确的 `editor_get_canvas_tree`、文本布局检查和预览。
 - 截图只能辅助判断视觉效果，不能证明媒体播放、Tab 切换或学生端互动可用。
 

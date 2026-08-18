@@ -49,8 +49,9 @@ Codex 的插件 MCP 配置目前不支持按操作系统选择命令，需要从
 把当前连接书本的目标普通目录冻结为完整可编辑语义快照：原始区块与元素、稳定定位索引、大纲、
 normalized+raw 数字模块、字体、富文本和工作副本/持久态。默认 `richText=deep`；MCP 把完整 Bridge
 envelope 按内容寻址保存到系统临时目录，分别返回文件 SHA-256 与 Bridge 稳定 hash。
-只有 `fullFidelity=true` 才适合作为完整语义化生成依据；部分读取会携带 completeness warnings，旧
-Bridge 则明确报不支持，不会回退到丢失样式和布局的摘要。
+只有 `fullFidelity=true` 才适合作为完整语义化生成依据。书级字体清单为空、且这是唯一缺项时，MCP
+会保留 `FONT_MAPPING_EMPTY` 诊断但允许 `fullFidelity=true`；富文本中的内联字体仍按原样冻结。其他
+部分读取仍会返回 `fullFidelity=false`，旧 Bridge 则明确报不支持，不会回退到丢失样式和布局的摘要。
 MCP 会按 Bridge 契约复算内容稳定 hash，并使用私有权限的受控临时目录；不接受调用方任意输出路径，
 也拒绝符号链接和非普通文件目标。多进程导出相同内容时共享同一个内容寻址文件并核对最终 hash。
 

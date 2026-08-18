@@ -223,6 +223,51 @@ test('不完整快照会保留诊断落盘但明确 fullFidelity=false', () => {
   assert.equal(result.completeness.warnings[0].code, 'RICH_TEXT_PARTIAL')
 })
 
+test('书级字体清单为空时保留诊断但不阻塞完整语义快照', () => {
+  const outputDirectory = mkdtempSync(join(tmpdir(), 'semantic-snapshot-empty-fonts-test-'))
+  const payload = createPayload()
+  payload.snapshot.fonts = { source: 'book-store-empty', items: [] }
+  payload.snapshot.completeness.complete = false
+  payload.snapshot.completeness.sections.fonts = false
+  payload.snapshot.completeness.warnings = [
+    {
+      code: 'FONT_MAPPING_EMPTY',
+      section: 'fonts',
+      message: '当前书本字体映射为空；未猜测可用字体'
+    }
+  ]
+  payload.stableHash = calculateSemanticSnapshotStableHash(payload)
+
+  const result = persistSemanticSnapshot(payload, { outputDirectory })
+
+  assert.equal(result.fullFidelity, true)
+  assert.equal(result.completeness.complete, false)
+  assert.equal(result.completeness.sections.fonts, false)
+  assert.equal(result.completeness.warnings[0].code, 'FONT_MAPPING_EMPTY')
+})
+
+test('字体清单为空并伴随其他缺项时仍阻塞完整语义快照', () => {
+  const outputDirectory = mkdtempSync(join(tmpdir(), 'semantic-snapshot-fonts-plus-gap-test-'))
+  const payload = createPayload()
+  payload.snapshot.fonts = { source: 'book-store-empty', items: [] }
+  payload.snapshot.completeness.complete = false
+  payload.snapshot.completeness.sections.fonts = false
+  payload.snapshot.completeness.sections.richText = false
+  payload.snapshot.completeness.warnings = [
+    {
+      code: 'FONT_MAPPING_EMPTY',
+      section: 'fonts',
+      message: '当前书本字体映射为空；未猜测可用字体'
+    },
+    { code: 'RICH_TEXT_PARTIAL', section: 'richText', message: '一个目标读取失败' }
+  ]
+  payload.stableHash = calculateSemanticSnapshotStableHash(payload)
+
+  const result = persistSemanticSnapshot(payload, { outputDirectory })
+
+  assert.equal(result.fullFidelity, false)
+})
+
 test('complete=true 会深校验定位、raw 模块、deep 文本与分节一致性', () => {
   const cases = [
     ['定位路径', (payload) => delete payload.snapshot.elementIndex[0].path, /elementIndex\[0\]\.path/],

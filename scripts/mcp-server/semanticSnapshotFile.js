@@ -289,7 +289,29 @@ export function validateSemanticSnapshotEnvelope(payload) {
 
 export function isFullFidelitySemanticSnapshot(payload) {
   validateSemanticSnapshotEnvelope(payload)
-  return payload.snapshot.completeness.complete === true && payload.snapshot.richText.detail === 'deep'
+  const snapshot = payload.snapshot
+  const { completeness, fonts, richText, state } = snapshot
+  const incompleteSections = REQUIRED_COMPLETENESS_SECTIONS.filter(
+    (section) => completeness.sections[section] !== true
+  )
+  const fontStoreEmptyOnly =
+    completeness.complete === false &&
+    incompleteSections.length === 1 &&
+    incompleteSections[0] === 'fonts' &&
+    fonts.source === 'book-store-empty' &&
+    fonts.items.length === 0 &&
+    completeness.warnings.length > 0 &&
+    completeness.warnings.every(
+      (warning) =>
+        warning.code === 'FONT_MAPPING_EMPTY' &&
+        (warning.section === undefined || warning.section === 'fonts')
+    ) &&
+    state.contentReady === true
+
+  return (
+    richText.detail === 'deep' &&
+    (completeness.complete === true || fontStoreEmptyOnly)
+  )
 }
 
 const collectBridgeErrorCodes = (error) => {

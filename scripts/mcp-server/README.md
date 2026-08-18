@@ -23,8 +23,9 @@
   书本内当前或指定普通目录的完整可编辑语义快照。它包含原始区块/元素、元素路径与几何索引、
   大纲、normalized+raw 数字模块、字体、富文本结构及 working/persisted/dirty 身份；结果按内容
   寻址写入系统临时目录并返回绝对路径、独立文件 SHA-256、Bridge 稳定 hash 和完整度。
-  `richText` 支持 `none/summary/deep`，默认 `deep`；`fullFidelity=false` 时仍保留诊断文件，但完整
-  生成流程必须停止或补齐。旧 Bridge 缺少该原子方法时明确返回
+  `richText` 支持 `none/summary/deep`，默认 `deep`；书级字体清单来源明确为 `book-store-empty`、且唯一
+  缺项/告警为 `fonts/FONT_MAPPING_EMPTY` 时会保留诊断但仍返回 `fullFidelity=true`，因为富文本内联字体
+  与其他语义分节仍然完整。其他 `fullFidelity=false` 结果必须停止或补齐。旧 Bridge 缺少该原子方法时明确返回
   `SEMANTIC_SNAPSHOT_UNSUPPORTED`，不会用摘要拼装伪降级。
   MCP 会重算 Bridge `stableHash`，并把 envelope 以仅当前用户可读写的受控临时目录/文件权限
   （POSIX `0700/0600`，Windows 使用系统 ACL 语义）落盘；拒绝符号链接和非普通目标。返回的
